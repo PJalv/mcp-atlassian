@@ -912,3 +912,109 @@ class TestMCPProtocolIntegration:
         # Execute tool and verify error handling
         with pytest.raises(MCPAtlassianAuthenticationError):
             await mock_failing_tool(ctx)
+
+    async def test_connection_status_tool_in_tool_list(
+        self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
+    ):
+        """Test that get_connection_status tool is included in tool discovery."""
+        with MockEnvironment.basic_auth_env():
+            # Create app context
+            app_context = MainAppContext(
+                full_jira_config=mock_jira_config,
+                full_confluence_config=mock_confluence_config,
+                read_only=False,
+            )
+
+            # Set up request context
+            request_context = MagicMock()
+            request_context.lifespan_context = {"app_lifespan_context": app_context}
+
+            # Set up server context
+            atlassian_mcp_server._mcp_server = MagicMock()
+            atlassian_mcp_server._mcp_server.request_context = request_context
+
+            # Mock get_tools to return connection status tool
+            async def mock_get_tools():
+                tools = {}
+                # Add connection status tool
+                tool = MagicMock()
+                tool.name = "get_connection_status"
+                tool.description = "Check connectivity and authentication status for all configured Atlassian services (Jira, Confluence). Returns a structured status report for diagnostics."
+                tool.tags = {"read", "status"}
+                tool.to_mcp_tool.return_value = MCPTool(
+                    name="get_connection_status",
+                    description="Check connectivity and authentication status for all configured Atlassian services (Jira, Confluence). Returns a structured status report for diagnostics.",
+                    inputSchema={"type": "object", "properties": {}},
+                )
+                tools["get_connection_status"] = tool
+                return tools
+
+            atlassian_mcp_server.get_tools = mock_get_tools
+
+            # Get filtered tools
+            tools = await atlassian_mcp_server._mcp_list_tools()
+
+            # Assert connection status tool is available
+            tool_names = [tool.name for tool in tools]
+            assert "get_connection_status" in tool_names
+            assert len(tools) == 1
+
+    async def test_connection_status_tool_execution(
+        self, atlassian_mcp_server, mock_jira_config, mock_confluence_config
+    ):
+        """Test execution of get_connection_status tool."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with MockEnvironment.basic_auth_env():
+            # Create app context
+            app_context = MainAppContext(
+                full_jira_config=mock_jira_config,
+                full_confluence_config=mock_confluence_config,
+                read_only=False,
+            )
+
+            # Create context
+            request_context = MagicMock()
+            request_context.lifespan_context = {"app_lifespan_context": app_context}
+            
+            mock_fastmcp = MagicMock()
+            mock_fastmcp.request_context = request_context
+            ctx = Context(fastmcp=mock_fastmcp)
+
+            # Mock the connection status helper functions
+            with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+                 patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+                
+                mock_jira.return_value = {
+                    "configured": True,
+                    "connected": True,
+                    "authenticated": True,
+                    "url": "https://test.atlassian.net",
+                    "deployment_type": "cloud",
+                    "authenticated_user": "user@example.com",
+                    "error": None,
+                    "token_expiry": None,
+                }
+                mock_confluence.return_value = {
+                    "configured": True,
+                    "connected": True,
+                    "authenticated": True,
+                    "url": "https://test.atlassian.net/wiki",
+                    "deployment_type": "cloud",
+                    "authenticated_user": "user@example.com",
+                    "error": None,
+                    "token_expiry": None,
+                }
+
+                # Execute the tool
+                result = await get_connection_status_tool(ctx)
+
+                # Verify the result structure
+                assert "overall_status" in result
+                assert "services" in result
+                assert "timestamp" in result
+                assert result["overall_status"] == "healthy"
+                assert "jira" in result["services"]
+                assert "confluence" in result["services"]
+                assert result["services"]["jira"]["authenticated"] is True
+                assert result["services"]["confluence"]["authenticated"] is True

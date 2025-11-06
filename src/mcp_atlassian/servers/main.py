@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 
 from cachetools import TTLCache
 from fastmcp import FastMCP
+from fastmcp import Context
 from fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
 from starlette.applications import Starlette
@@ -336,3 +337,41 @@ async def _health_check_route(request: Request) -> JSONResponse:
 
 
 logger.info("Added /healthz endpoint for Kubernetes probes")
+
+
+@main_mcp.tool(
+    name="get_connection_status",
+    description="Check connectivity and authentication status for all configured Atlassian services (Jira, Confluence). Returns a structured status report for diagnostics.",
+    tags={"read", "status"},
+)
+async def get_connection_status_tool(ctx: Context) -> dict:
+    """
+    Returns a structured status report for all configured Atlassian services.
+    """
+    from mcp_atlassian.servers.dependencies import (
+        check_jira_connection_status,
+        check_confluence_connection_status,
+    )
+    import datetime
+    results = {}
+    jira_status = await check_jira_connection_status(ctx)
+    confluence_status = await check_confluence_connection_status(ctx)
+    services = {}
+    if jira_status["configured"]:
+        services["jira"] = jira_status
+    if confluence_status["configured"]:
+        services["confluence"] = confluence_status
+    # Compute overall status
+    if not services:
+        overall = "unavailable"  # No services configured
+    elif all(s.get("authenticated") for s in services.values()):
+        overall = "healthy"
+    elif any(s.get("authenticated") for s in services.values()):
+        overall = "degraded"
+    else:
+        overall = "unavailable"
+    results["overall_status"] = overall
+    results["services"] = services
+    results["timestamp"] = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    return results
+

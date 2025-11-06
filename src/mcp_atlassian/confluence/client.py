@@ -16,7 +16,9 @@ from .config import ConfluenceConfig
 logger = logging.getLogger("mcp-atlassian")
 
 
-class ConfluenceClient:
+from .attachments import AttachmentsMixin
+
+class ConfluenceClient(AttachmentsMixin):
     """Base client for Confluence API interactions."""
 
     def __init__(self, config: ConfluenceConfig | None = None) -> None:

@@ -111,12 +111,49 @@ This option is useful in scenarios where OAuth credential management is centrali
 
 ### 📦 2. Installation
 
-MCP Atlassian is distributed as a Docker image. This is the recommended way to run the server, especially for IDE integration. Ensure you have Docker installed.
+MCP Atlassian offers two installation methods:
+
+#### Option A: Docker (Recommended)
+
+MCP Atlassian is distributed as a Docker image. This is the recommended way to run the server, especially for IDE integration.
 
 ```bash
 # Pull Pre-built Image
 docker pull ghcr.io/sooperset/mcp-atlassian:latest
 ```
+
+#### Option B: Nix Shell
+
+For users who prefer Nix package management, a `shell.nix` file is provided for a reproducible runtime environment.
+
+**Prerequisites:**
+- [Nix package manager](https://nixos.org/download.html) installed
+- Git (for cloning the repository)
+
+**Setup:**
+```bash
+# Clone the repository
+git clone https://github.com/sooperset/mcp-atlassian.git
+cd mcp-atlassian
+
+# Enter the Nix shell environment
+nix-shell
+
+# Install Python dependencies
+uv sync --frozen
+
+# Run the server
+uv run mcp-atlassian
+```
+
+The Nix shell provides:
+- Python 3.10+
+- uv package manager
+- Git
+- SSL certificates
+
+> [!NOTE]
+> The Nix environment is runtime-focused and does not include development tools. For development work, use `uv sync --frozen --all-extras --dev` instead.
 
 ## 🛠️ IDE Integration
 
@@ -738,6 +775,10 @@ Here's a complete example of setting up multi-user authentication with streamabl
 - `confluence_create_page`: Create a new page
 - `confluence_update_page`: Update an existing page
 
+#### Status & Diagnostic Tools
+
+- `get_connection_status`: Check connectivity and authentication status for all configured Atlassian services
+
 <details> <summary>View All Tools</summary>
 
 | Operation | Jira Tools                          | Confluence Tools               |
@@ -758,6 +799,7 @@ Here's a complete example of setting up multi-user authentication with streamabl
 |           | `jira_get_user_profile`             |                                |
 |           | `jira_download_attachments`         |                                |
 |           | `jira_get_project_versions`         |                                |
+| **Status**| `get_connection_status` (both services) |                                |
 | **Write** | `jira_create_issue`                 | `confluence_create_page`       |
 |           | `jira_update_issue`                 | `confluence_update_page`       |
 |           | `jira_delete_issue`                 | `confluence_delete_page`       |

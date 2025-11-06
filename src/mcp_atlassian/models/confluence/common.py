@@ -13,7 +13,7 @@ from ..constants import (
     UNASSIGNED,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mcp-atlassian")
 
 
 class ConfluenceUser(ApiModel):
@@ -79,6 +79,7 @@ class ConfluenceUser(ApiModel):
         }
 
 
+from pydantic import ConfigDict
 class ConfluenceAttachment(ApiModel):
     """
     Model representing a Confluence attachment.
@@ -90,6 +91,9 @@ class ConfluenceAttachment(ApiModel):
     title: str | None = None
     media_type: str | None = None
     file_size: int | None = None
+    download_url: str | None = None  # direct download URL (if present)
+    relative_path: str | None = None  # relative download path (if present)
+    model_config = ConfigDict(extra="allow")
 
     @classmethod
     def from_api_response(
@@ -107,6 +111,22 @@ class ConfluenceAttachment(ApiModel):
         if not data:
             return cls()
 
+        # Try to extract download URL and relative path
+        logger.debug(f"from_api_response: incoming data={data}")
+        download_url = None
+        relative_path = None
+        # Cloud/Server: _links.download is a relative path
+        if "_links" in data and "download" in data["_links"]:
+            relative_path = data["_links"]["download"]
+        # Some APIs may provide an absolute URL
+        if "_links" in data and "self" in data["_links"]:
+            # Not always a download URL, but keep for reference
+            download_url = data["_links"].get("self")
+        # Some APIs may provide a direct download link
+        if "_expandable" in data and "content" in data["_expandable"]:
+            # Not a URL, but keep for future
+            pass
+        logger.debug(f"from_api_response: extracted download_url={download_url}, relative_path={relative_path}")
         return cls(
             id=data.get("id"),
             type=data.get("type"),
@@ -114,7 +134,24 @@ class ConfluenceAttachment(ApiModel):
             title=data.get("title"),
             media_type=data.get("extensions", {}).get("mediaType"),
             file_size=data.get("extensions", {}).get("fileSize"),
+            download_url=download_url,
+            relative_path=relative_path,
         )
+
+    def get_download_url(self, base_url: str) -> str | None:
+        """
+        Get the full download URL for this attachment.
+        Args:
+            base_url: The base URL of the Confluence instance
+        Returns:
+            The full download URL, or None if not available
+        """
+        logger.debug(f"get_download_url: download_url={self.download_url}, relative_path={self.relative_path}, base_url={base_url}")
+        if self.relative_path:
+            return base_url.rstrip("/") + self.relative_path
+        if self.download_url and self.download_url.startswith("http"):
+            return self.download_url
+        return None
 
     def to_simplified_dict(self) -> dict[str, Any]:
         """Convert to simplified dictionary for API response."""
@@ -125,4 +162,5 @@ class ConfluenceAttachment(ApiModel):
             "title": self.title,
             "media_type": self.media_type,
             "file_size": self.file_size,
+            "download_url": self.get_download_url("") if self.download_url or self.relative_path else None,
         }

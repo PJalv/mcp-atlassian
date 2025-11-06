@@ -344,6 +344,32 @@ async def get_comments(
 
 
 @confluence_mcp.tool(tags={"confluence", "read"})
+async def download_attachments(
+    ctx: Context,
+    page_id: Annotated[
+        str,
+        Field(description="The ID of the Confluence page whose attachments you want to download")
+    ],
+    target_dir: Annotated[
+        str,
+        Field(description="Directory where attachments should be saved (will be created if it doesn't exist)")
+    ],
+) -> str:
+    """Download all attachments for a Confluence page to a local directory.
+
+    Args:
+        ctx: The FastMCP context.
+        page_id: The ID of the Confluence page.
+        target_dir: Directory to save attachments.
+
+    Returns:
+        JSON string indicating the result of the download operation.
+    """
+    confluence_fetcher = await get_confluence_fetcher(ctx)
+    result = confluence_fetcher.download_page_attachments(page_id=page_id, target_dir=target_dir)
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+@confluence_mcp.tool(tags={"confluence", "read"})
 async def get_labels(
     ctx: Context,
     page_id: Annotated[

@@ -382,3 +382,85 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
     raise ValueError(
         "Confluence client (fetcher) not available. Ensure server is configured correctly."
     )
+
+
+async def check_jira_connection_status(ctx: Context) -> dict:
+    """
+    Check Jira connection and authentication status for diagnostics.
+    Returns a dict matching the connection-status schema for Jira.
+    """
+    status = {
+        "configured": False,
+        "connected": False,
+        "authenticated": False,
+        "url": None,
+        "deployment_type": None,
+        "authenticated_user": None,
+        "error": None,
+        "token_expiry": None,
+    }
+    try:
+        fetcher = await get_jira_fetcher(ctx)
+        config = fetcher.config
+        status["configured"] = True
+        status["url"] = config.url
+        status["deployment_type"] = "cloud" if getattr(config, "is_cloud", False) else "server"
+        # Try to get current user info
+        try:
+            user_id = fetcher.get_current_user_account_id()
+            status["connected"] = True
+            status["authenticated"] = True
+            status["authenticated_user"] = user_id
+        except Exception as e:
+            status["connected"] = True  # If fetcher constructed, connection is up
+            status["authenticated"] = False
+            status["error"] = str(e)
+        # OAuth expiry info
+        if getattr(config, "auth_type", None) == "oauth" and getattr(config, "oauth_config", None):
+            expiry = getattr(config.oauth_config, "expires_at", None)
+            if expiry:
+                status["token_expiry"] = expiry
+    except Exception as e:
+        status["error"] = str(e)
+    return status
+
+
+async def check_confluence_connection_status(ctx: Context) -> dict:
+    """
+    Check Confluence connection and authentication status for diagnostics.
+    Returns a dict matching the connection-status schema for Confluence.
+    """
+    status = {
+        "configured": False,
+        "connected": False,
+        "authenticated": False,
+        "url": None,
+        "deployment_type": None,
+        "authenticated_user": None,
+        "error": None,
+        "token_expiry": None,
+    }
+    try:
+        fetcher = await get_confluence_fetcher(ctx)
+        config = fetcher.config
+        status["configured"] = True
+        status["url"] = config.url
+        status["deployment_type"] = "cloud" if getattr(config, "is_cloud", False) else "server"
+        # Try to get current user info
+        try:
+            user_info = fetcher.get_current_user_info()
+            status["connected"] = True
+            status["authenticated"] = True
+            status["authenticated_user"] = user_info.get("email") or user_info.get("username")
+        except Exception as e:
+            status["connected"] = True  # If fetcher constructed, connection is up
+            status["authenticated"] = False
+            status["error"] = str(e)
+        # OAuth expiry info
+        if getattr(config, "auth_type", None) == "oauth" and getattr(config, "oauth_config", None):
+            expiry = getattr(config.oauth_config, "expires_at", None)
+            if expiry:
+                status["token_expiry"] = expiry
+    except Exception as e:
+        status["error"] = str(e)
+    return status

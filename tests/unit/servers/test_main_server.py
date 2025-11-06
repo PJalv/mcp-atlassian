@@ -142,3 +142,236 @@ class TestUserTokenMiddleware:
         # Verify the request was processed normally
         mock_call_next.assert_called_once_with(mock_request)
         assert result is not None
+
+
+@pytest.mark.anyio
+class TestGetConnectionStatusTool:
+    """Test suite for the get_connection_status tool."""
+
+    @pytest.fixture
+    def mock_context(self):
+        """Create a mock FastMCP context."""
+        from fastmcp import Context
+        return MagicMock(spec=Context)
+
+    @pytest.mark.anyio
+    async def test_both_services_configured_and_working(self, mock_context):
+        """Test with both services configured and working."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": True,
+                "url": "https://test.atlassian.net",
+                "deployment_type": "cloud",
+                "authenticated_user": "user@example.com",
+                "error": None,
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": True,
+                "url": "https://test.atlassian.net/wiki",
+                "deployment_type": "cloud",
+                "authenticated_user": "user@example.com",
+                "error": None,
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "healthy"
+            assert "jira" in result["services"]
+            assert "confluence" in result["services"]
+            assert result["services"]["jira"]["authenticated"] is True
+            assert result["services"]["confluence"]["authenticated"] is True
+            assert "timestamp" in result
+
+    @pytest.mark.anyio
+    async def test_only_jira_configured(self, mock_context):
+        """Test with only Jira configured."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": True,
+                "url": "https://test.atlassian.net",
+                "deployment_type": "cloud",
+                "authenticated_user": "user@example.com",
+                "error": None,
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": False,
+                "connected": False,
+                "authenticated": False,
+                "url": None,
+                "deployment_type": None,
+                "authenticated_user": None,
+                "error": "Confluence client (fetcher) not available. Ensure server is configured correctly.",
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "healthy"
+            assert "jira" in result["services"]
+            assert "confluence" not in result["services"]
+            assert result["services"]["jira"]["authenticated"] is True
+
+    @pytest.mark.anyio
+    async def test_only_confluence_configured(self, mock_context):
+        """Test with only Confluence configured."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": False,
+                "connected": False,
+                "authenticated": False,
+                "url": None,
+                "deployment_type": None,
+                "authenticated_user": None,
+                "error": "Jira client (fetcher) not available. Ensure server is configured correctly.",
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": True,
+                "url": "https://test.atlassian.net/wiki",
+                "deployment_type": "cloud",
+                "authenticated_user": "user@example.com",
+                "error": None,
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "healthy"
+            assert "jira" not in result["services"]
+            assert "confluence" in result["services"]
+            assert result["services"]["confluence"]["authenticated"] is True
+
+    @pytest.mark.anyio
+    async def test_neither_service_configured(self, mock_context):
+        """Test with neither service configured."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": False,
+                "connected": False,
+                "authenticated": False,
+                "url": None,
+                "deployment_type": None,
+                "authenticated_user": None,
+                "error": "Jira client (fetcher) not available. Ensure server is configured correctly.",
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": False,
+                "connected": False,
+                "authenticated": False,
+                "url": None,
+                "deployment_type": None,
+                "authenticated_user": None,
+                "error": "Confluence client (fetcher) not available. Ensure server is configured correctly.",
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "unavailable"
+            assert len(result["services"]) == 0
+
+    @pytest.mark.anyio
+    async def test_authentication_failures(self, mock_context):
+        """Test with authentication failures."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": False,
+                "url": "https://test.atlassian.net",
+                "deployment_type": "cloud",
+                "authenticated_user": None,
+                "error": "Unable to get current user account ID: 401 Unauthorized",
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": True,
+                "connected": True,
+                "authenticated": False,
+                "url": "https://test.atlassian.net/wiki",
+                "deployment_type": "cloud",
+                "authenticated_user": None,
+                "error": "Confluence token validation failed: 401 from /rest/api/user/current",
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "unavailable"
+            assert "jira" in result["services"]
+            assert "confluence" in result["services"]
+            assert result["services"]["jira"]["authenticated"] is False
+            assert result["services"]["confluence"]["authenticated"] is False
+            assert "401" in result["services"]["jira"]["error"]
+            assert "401" in result["services"]["confluence"]["error"]
+
+    @pytest.mark.anyio
+    async def test_network_connectivity_errors(self, mock_context):
+        """Test with network/connectivity errors."""
+        from mcp_atlassian.servers.main import get_connection_status_tool
+        
+        with patch("mcp_atlassian.servers.dependencies.check_jira_connection_status") as mock_jira, \
+             patch("mcp_atlassian.servers.dependencies.check_confluence_connection_status") as mock_confluence:
+            
+            mock_jira.return_value = {
+                "configured": True,
+                "connected": False,
+                "authenticated": False,
+                "url": "https://test.atlassian.net",
+                "deployment_type": "cloud",
+                "authenticated_user": None,
+                "error": "Connection timeout",
+                "token_expiry": None,
+            }
+            mock_confluence.return_value = {
+                "configured": True,
+                "connected": False,
+                "authenticated": False,
+                "url": "https://test.atlassian.net/wiki",
+                "deployment_type": "cloud",
+                "authenticated_user": None,
+                "error": "DNS resolution failed",
+                "token_expiry": None,
+            }
+            
+            result = await get_connection_status_tool(mock_context)
+            
+            assert result["overall_status"] == "unavailable"
+            assert "jira" in result["services"]
+            assert "confluence" in result["services"]
+            assert result["services"]["jira"]["connected"] is False
+            assert result["services"]["confluence"]["connected"] is False
+            assert "timeout" in result["services"]["jira"]["error"]
+            assert "DNS" in result["services"]["confluence"]["error"]
