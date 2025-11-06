@@ -9,20 +9,20 @@ The system SHALL allow users to run mcp-atlassian directly from the GitHub repos
 #### Scenario: Run server from GitHub URL
 
 **Given** the user has Nix with Flakes enabled
-**When** they execute `nix run github:sooperset/mcp-atlassian -- --help`
+**When** they execute `nix run github:PJalv/mcp-atlassian -- --help`
 **Then** the help text is displayed without requiring repository cloning
 
 #### Scenario: Run server with environment configuration
 
 **Given** the user has Nix with Flakes enabled  
 **And** they have set environment variables for Confluence/Jira credentials
-**When** they execute `nix run github:sooperset/mcp-atlassian`
+**When** they execute `nix run github:PJalv/mcp-atlassian`
 **Then** the MCP server starts and connects to configured Atlassian services
 
 #### Scenario: Run OAuth setup wizard from GitHub
 
 **Given** the user has Nix with Flakes enabled
-**When** they execute `nix run github:sooperset/mcp-atlassian -- --oauth-setup`
+**When** they execute `nix run github:PJalv/mcp-atlassian -- --oauth-setup`
 **Then** the OAuth setup wizard starts and guides them through configuration
 
 ---
@@ -34,7 +34,7 @@ The system SHALL provide users with a development environment containing all req
 #### Scenario: Enter development shell from GitHub
 
 **Given** the user has Nix with Flakes enabled
-**When** they execute `nix develop github:sooperset/mcp-atlassian`
+**When** they execute `nix develop github:PJalv/mcp-atlassian`
 **Then** they are dropped into a shell with Python, uv, git, and dev tools available
 
 #### Scenario: Run tests in development shell
@@ -130,7 +130,7 @@ The system SHALL support configuration in IDEs (Claude Desktop, Cursor) using th
 #### Scenario: Configure Claude Desktop with Nix
 
 **Given** Claude Desktop is installed
-**When** the user configures `command: "nix"` with `args: ["run", "github:sooperset/mcp-atlassian", "--"]`
+**When** the user configures `command: "nix"` with `args: ["run", "github:PJalv/mcp-atlassian", "--"]`
 **Then** Claude Desktop can launch and communicate with the MCP server
 
 #### Scenario: Configure Cursor with Nix

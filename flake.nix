@@ -1,7 +1,7 @@
 {
   # Nix Flake for MCP Atlassian
-  # Provides direct GitHub execution: nix run github:sooperset/mcp-atlassian
-  # Development environment: nix develop github:sooperset/mcp-atlassian
+  # Provides direct GitHub execution: nix run github:PJalv/mcp-atlassian
+  # Development environment: nix develop github:PJalv/mcp-atlassian
   # System installation: Add to NixOS/home-manager configurations
   
   description = "Model Context Protocol (MCP) server for Atlassian products (Confluence and Jira)";
@@ -55,7 +55,7 @@
         };
         
         # App outputs - executable via `nix run`
-        # Enables: nix run github:sooperset/mcp-atlassian
+        # Enables: nix run github:PJalv/mcp-atlassian
         apps = {
           default = {
             type = "app";

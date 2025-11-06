@@ -128,10 +128,10 @@ Run directly from GitHub without installation using Nix Flakes:
 
 ```bash
 # Run directly from GitHub
-nix run github:sooperset/mcp-atlassian -- --help
+nix run github:PJalv/mcp-atlassian -- --help
 
 # Run with environment variables
-nix run github:sooperset/mcp-atlassian -- \
+nix run github:PJalv/mcp-atlassian -- \
   --confluence-url https://your-company.atlassian.net/wiki \
   --confluence-username your.email@company.com \
   --confluence-token your_token

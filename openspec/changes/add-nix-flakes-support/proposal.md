@@ -17,8 +17,8 @@ This multi-step process is cumbersome compared to the Docker experience (`docker
 ## Proposed Solution
 
 Add a `flake.nix` file that enables:
-- Direct execution: `nix run github:sooperset/mcp-atlassian`
-- Shell environment: `nix develop github:sooperset/mcp-atlassian`
+- Direct execution: `nix run github:PJalv/mcp-atlassian`
+- Shell environment: `nix develop github:PJalv/mcp-atlassian`
 - Declarative package installation: Add to NixOS/home-manager configurations
 
 ## Benefits
@@ -41,7 +41,7 @@ uv run mcp-atlassian
 
 **After:**
 ```bash
-nix run github:sooperset/mcp-atlassian
+nix run github:PJalv/mcp-atlassian
 ```
 
 ## Implementation Scope

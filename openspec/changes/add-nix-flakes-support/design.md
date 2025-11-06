@@ -69,7 +69,7 @@ apps.default = {
 };
 ```
 
-This enables `nix run github:sooperset/mcp-atlassian`.
+This enables `nix run github:PJalv/mcp-atlassian`.
 
 ### DevShells Output
 
@@ -103,12 +103,12 @@ Reuse existing shell.nix structure but add development tools:
 
 ### Scenario 1: Quick Try (Zero Install)
 ```bash
-nix run github:sooperset/mcp-atlassian -- --help
+nix run github:PJalv/mcp-atlassian -- --help
 ```
 
-### Scenario 2: Development Environment
+### Development Environment
 ```bash
-nix develop github:sooperset/mcp-atlassian
+nix develop github:PJalv/mcp-atlassian
 # Now in shell with all dev tools
 uv run pytest
 ```
@@ -117,7 +117,7 @@ uv run pytest
 ```nix
 # configuration.nix
 environment.systemPackages = [
-  (builtins.getFlake "github:sooperset/mcp-atlassian").packages.${system}.default
+  (builtins.getFlake "github:PJalv/mcp-atlassian").packages.${system}.default
 ];
 ```
 
@@ -129,7 +129,7 @@ environment.systemPackages = [
       "command": "nix",
       "args": [
         "run",
-        "github:sooperset/mcp-atlassian",
+        "github:PJalv/mcp-atlassian",
         "--",
         "--transport",
         "stdio"

@@ -35,7 +35,7 @@
   - [x] 2.1.5 N/A - devShells removed per design decision
 
 - [ ] 2.2 GitHub URL testing
-  - [ ] 2.2.1 Test `nix run github:sooperset/mcp-atlassian -- --help` (requires push to main)
+  - [ ] 2.2.1 Test `nix run github:PJalv/mcp-atlassian -- --help` (requires push to main)
   - [ ] 2.2.2 N/A - devShells removed per design decision
 
 - [x] 2.3 Multi-platform testing
@@ -57,7 +57,7 @@
 
 - [x] 3.1 Update README.md
   - [x] 3.1.1 Add "Option B: Nix Flakes (Recommended for Nix users)" section
-  - [x] 3.1.2 Document direct run: `nix run github:sooperset/mcp-atlassian`
+  - [x] 3.1.2 Document direct run: `nix run github:PJalv/mcp-atlassian`
   - [x] 3.1.3 N/A - No dev environment (removed devShells output)
   - [ ] 3.1.4 Add IDE integration example with Nix Flakes (future enhancement)
   - [ ] 3.1.5 Document system/home-manager installation examples (future enhancement)
