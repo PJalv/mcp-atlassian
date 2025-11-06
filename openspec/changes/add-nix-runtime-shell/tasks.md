@@ -16,11 +16,11 @@
   - [x] 3.1.1 Verify shell environment loads successfully
   - [x] 3.1.2 Test `uv sync` works inside the shell
   - [x] 3.1.3 Test `uv run mcp-atlassian --help` displays help
-  - [ ] 3.1.4 Test actual server startup with minimal config
-  - [ ] 3.1.5 Verify OAuth setup wizard works in nix-shell
-- [ ] 3.2 Test on different Nix configurations
-  - [ ] 3.2.1 Test on NixOS
-  - [ ] 3.2.2 Test on non-NixOS Linux with Nix installed
+  - [x] 3.1.4 Test actual server startup with minimal config
+  - [x] 3.1.5 Verify OAuth setup wizard works in nix-shell
+- [x] 3.2 Test on different Nix configurations
+  - [x] 3.2.1 Test on NixOS
+  - [x] 3.2.2 Test on non-NixOS Linux with Nix installed
 
 ## 4. Documentation
 - [x] 4.1 Add Nix installation section to README.md
