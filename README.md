@@ -122,15 +122,44 @@ MCP Atlassian is distributed as a Docker image. This is the recommended way to r
 docker pull ghcr.io/sooperset/mcp-atlassian:latest
 ```
 
-#### Option B: Nix Shell
+#### Option B: Nix Flakes (Recommended for Nix users)
 
-For users who prefer Nix package management, a `shell.nix` file is provided for a reproducible runtime environment.
+Run directly from GitHub without installation using Nix Flakes:
+
+```bash
+# Run directly from GitHub
+nix run github:sooperset/mcp-atlassian -- --help
+
+# Run with environment variables
+nix run github:sooperset/mcp-atlassian -- \
+  --confluence-url https://your-company.atlassian.net/wiki \
+  --confluence-username your.email@company.com \
+  --confluence-token your_token
+```
 
 **Prerequisites:**
-- [Nix package manager](https://nixos.org/download.html) installed
-- Git (for cloning the repository)
+- [Nix package manager](https://nixos.org/download.html) with flakes enabled
 
-**Setup:**
+**Enabling Flakes:**
+```bash
+# Add to ~/.config/nix/nix.conf or /etc/nix/nix.conf
+experimental-features = nix-command flakes
+```
+
+The Nix flake automatically provides:
+- Python 3.12
+- uv package manager
+- Git
+- SSL certificates
+- All Python dependencies
+
+> [!TIP]
+> Nix Flakes provide instant execution without manual setup. The first run downloads dependencies, subsequent runs are cached and start immediately.
+
+#### Option C: Nix Shell (Legacy)
+
+For users who prefer the traditional Nix approach, a `shell.nix` file is provided:
+
 ```bash
 # Clone the repository
 git clone https://github.com/sooperset/mcp-atlassian.git
@@ -146,14 +175,8 @@ uv sync --frozen
 uv run mcp-atlassian
 ```
 
-The Nix shell provides:
-- Python 3.10+
-- uv package manager
-- Git
-- SSL certificates
-
 > [!NOTE]
-> The Nix environment is runtime-focused and does not include development tools. For development work, use `uv sync --frozen --all-extras --dev` instead.
+> We recommend using Nix Flakes (Option B) for a simpler experience. The Nix shell environment is runtime-focused and does not include development tools.
 
 ## 🛠️ IDE Integration
 
