@@ -52,7 +52,7 @@
           
           # Create venv and install build dependencies (needed with UV_NO_BUILD_ISOLATION)
           ${pkgs.uv}/bin/uv venv
-          ${pkgs.uv}/bin/uv pip install hatchling hatch-vcs uv-dynamic-versioning setuptools maturin cffi wheel puccinialin poetry-core flit-core pdm-backend
+          ${pkgs.uv}/bin/uv pip install hatchling hatch-vcs uv-dynamic-versioning editables setuptools maturin cffi wheel puccinialin poetry-core flit-core pdm-backend
           
           # Install the project itself
           ${pkgs.uv}/bin/uv pip install -e .
