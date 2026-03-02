@@ -36,6 +36,9 @@
           export LIBRARY_PATH="${pkgs.libxml2.out}/lib:${pkgs.libxslt.out}/lib:$LIBRARY_PATH"
           export PKG_CONFIG_PATH="${pkgs.libxml2.dev}/lib/pkgconfig:${pkgs.libxslt.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
           
+          # Disable build isolation so native deps are accessible during package builds
+          export UV_NO_BUILD_ISOLATION=1
+          
           # Get the source directory (read-only in nix store)
           SOURCE_DIR="${./.}"
           
