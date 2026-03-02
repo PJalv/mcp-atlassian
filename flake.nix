@@ -31,14 +31,13 @@
           export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           export NIX_SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           
-          # Expose libxml2 and libxslt headers/libraries for building lxml
-          export C_INCLUDE_PATH="${pkgs.libxml2.dev}/include/libxml2:${pkgs.libxslt.dev}/include:$C_INCLUDE_PATH"
-          export LIBRARY_PATH="${pkgs.libxml2.out}/lib:${pkgs.libxslt.out}/lib:$LIBRARY_PATH"
-          export PKG_CONFIG_PATH="${pkgs.libxml2.dev}/lib/pkgconfig:${pkgs.libxslt.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
+          # Expose native library headers/libraries for building packages
+          export C_INCLUDE_PATH="${pkgs.libxml2.dev}/include/libxml2:${pkgs.libxslt.dev}/include:${pkgs.libffi.dev}/include:$C_INCLUDE_PATH"
+          export LIBRARY_PATH="${pkgs.libxml2.out}/lib:${pkgs.libxslt.out}/lib:${pkgs.libffi.out}/lib:$LIBRARY_PATH"
+          export PKG_CONFIG_PATH="${pkgs.libxml2.dev}/lib/pkgconfig:${pkgs.libxslt.dev}/lib/pkgconfig:${pkgs.libffi.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
           
-          # Only disable build isolation for packages needing native libs (lxml)
-          # This allows uv.lock to be respected for all other packages
-          export UV_NO_BUILD_ISOLATION_PACKAGE="lxml"
+          # Disable build isolation for packages needing native libs
+          export UV_NO_BUILD_ISOLATION_PACKAGE="lxml,cffi,pydantic-core"
           
           # Get the source directory (read-only in nix store)
           SOURCE_DIR="${./.}"
