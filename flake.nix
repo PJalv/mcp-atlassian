@@ -54,6 +54,9 @@
           ${pkgs.uv}/bin/uv venv
           ${pkgs.uv}/bin/uv pip install hatchling hatch-vcs setuptools maturin cffi wheel puccinialin poetry-core flit-core pdm-backend
           
+          # Install the project itself
+          ${pkgs.uv}/bin/uv pip install -e .
+          
           # Run using uv with --no-sync to preserve manually installed packages
           exec ${pkgs.uv}/bin/uv run --no-sync mcp-atlassian "$@"
         '';
