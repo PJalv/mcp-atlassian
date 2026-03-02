@@ -27,7 +27,7 @@
         # Create a wrapper script that runs mcp-atlassian using uv
         # This avoids building a full package and instead just runs the project directly
         mcp-atlassian-runner = pkgs.writeShellScriptBin "mcp-atlassian" ''
-          export PATH="${pkgs.lib.makeBinPath [ pkgs.uv pkgs.git python pkgs.libxml2 pkgs.libxslt ]}:$PATH"
+          export PATH="${pkgs.lib.makeBinPath [ pkgs.uv pkgs.git python pkgs.libxml2 pkgs.libxslt pkgs.pkg-config ]}:$PATH"
           export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           export NIX_SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           
@@ -36,8 +36,9 @@
           export LIBRARY_PATH="${pkgs.libxml2.out}/lib:${pkgs.libxslt.out}/lib:$LIBRARY_PATH"
           export PKG_CONFIG_PATH="${pkgs.libxml2.dev}/lib/pkgconfig:${pkgs.libxslt.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
           
-          # Disable build isolation so native deps are accessible during package builds
-          export UV_NO_BUILD_ISOLATION=1
+          # Only disable build isolation for packages needing native libs (lxml)
+          # This allows uv.lock to be respected for all other packages
+          export UV_NO_BUILD_ISOLATION_PACKAGE="lxml"
           
           # Get the source directory (read-only in nix store)
           SOURCE_DIR="${./.}"
@@ -50,15 +51,8 @@
           cp -r "$SOURCE_DIR"/. "$WORK_DIR/"
           cd "$WORK_DIR"
           
-          # Create venv and install build dependencies (needed with UV_NO_BUILD_ISOLATION)
-          ${pkgs.uv}/bin/uv venv
-          ${pkgs.uv}/bin/uv pip install hatchling hatch-vcs uv-dynamic-versioning editables setuptools maturin cffi wheel puccinialin poetry-core flit-core pdm-backend
-          
-          # Install the project itself
-          ${pkgs.uv}/bin/uv pip install -e .
-          
-          # Run using uv with --no-sync to preserve manually installed packages
-          exec ${pkgs.uv}/bin/uv run --no-sync mcp-atlassian "$@"
+          # Run using uv (will use uv.lock and respect pinned versions)
+          exec ${pkgs.uv}/bin/uv run mcp-atlassian "$@"
         '';
       in
       {
