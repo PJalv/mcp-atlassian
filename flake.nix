@@ -31,6 +31,11 @@
           export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           export NIX_SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           
+          # Expose libxml2 and libxslt headers/libraries for building lxml
+          export C_INCLUDE_PATH="${pkgs.libxml2.dev}/include/libxml2:${pkgs.libxslt.dev}/include:$C_INCLUDE_PATH"
+          export LIBRARY_PATH="${pkgs.libxml2.out}/lib:${pkgs.libxslt.out}/lib:$LIBRARY_PATH"
+          export PKG_CONFIG_PATH="${pkgs.libxml2.dev}/lib/pkgconfig:${pkgs.libxslt.dev}/lib/pkgconfig:$PKG_CONFIG_PATH"
+          
           # Get the source directory (read-only in nix store)
           SOURCE_DIR="${./.}"
           
