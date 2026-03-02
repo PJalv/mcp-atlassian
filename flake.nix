@@ -47,7 +47,7 @@
           trap "rm -rf $WORK_DIR" EXIT
           
           # Copy source to temporary directory
-          cp -r "$SOURCE_DIR"/". "$WORK_DIR/"
+          cp -r "$SOURCE_DIR"/. "$WORK_DIR/"
           cd "$WORK_DIR"
           
           # Create venv and install hatchling build dependency (needed with UV_NO_BUILD_ISOLATION)
