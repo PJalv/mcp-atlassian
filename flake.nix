@@ -27,7 +27,7 @@
         # Create a wrapper script that runs mcp-atlassian using uv
         # This avoids building a full package and instead just runs the project directly
         mcp-atlassian-runner = pkgs.writeShellScriptBin "mcp-atlassian" ''
-          export PATH="${pkgs.lib.makeBinPath [ pkgs.uv pkgs.git python ]}:$PATH"
+          export PATH="${pkgs.lib.makeBinPath [ pkgs.uv pkgs.git python pkgs.libxml2 pkgs.libxslt ]}:$PATH"
           export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           export NIX_SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
           
