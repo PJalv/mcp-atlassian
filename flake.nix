@@ -39,6 +39,11 @@
           # Disable build isolation for packages needing native libs
           export UV_NO_BUILD_ISOLATION_PACKAGE="lxml,cffi,pydantic-core"
           
+          # Use system Python instead of downloading uv-managed Python 3.14
+          # Python 3.14 is not supported by pydantic-core's PyO3 dependency
+          export UV_PYTHON="${python}/bin/python"
+          export UV_PYTHON_DOWNLOADS="never"
+          
           # Get the source directory (read-only in nix store)
           SOURCE_DIR="${./.}"
           
