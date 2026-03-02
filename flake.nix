@@ -47,8 +47,12 @@
           trap "rm -rf $WORK_DIR" EXIT
           
           # Copy source to temporary directory
-          cp -r "$SOURCE_DIR"/. "$WORK_DIR/"
+          cp -r "$SOURCE_DIR"/". "$WORK_DIR/"
           cd "$WORK_DIR"
+          
+          # Create venv and install hatchling build dependency (needed with UV_NO_BUILD_ISOLATION)
+          ${pkgs.uv}/bin/uv venv
+          ${pkgs.uv}/bin/uv pip install hatchling
           
           # Run using uv (will create .venv in temp dir and respect pyproject.toml)
           exec ${pkgs.uv}/bin/uv run mcp-atlassian "$@"
