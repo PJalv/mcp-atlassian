@@ -52,7 +52,7 @@
           
           # Create venv and install build dependencies (needed with UV_NO_BUILD_ISOLATION)
           ${pkgs.uv}/bin/uv venv
-          ${pkgs.uv}/bin/uv pip install hatchling setuptools
+          ${pkgs.uv}/bin/uv pip install hatchling setuptools maturin cffi wheel
           
           # Run using uv (will create .venv in temp dir and respect pyproject.toml)
           exec ${pkgs.uv}/bin/uv run mcp-atlassian "$@"
