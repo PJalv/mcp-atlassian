@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,8 @@ from mcp_atlassian.servers.context import MainAppContext
 from mcp_atlassian.servers.dependencies import (
     _create_user_config_for_fetcher,
     _resolve_bearer_auth_type,
+    check_confluence_connection_status,
+    check_jira_connection_status,
     get_confluence_fetcher,
     get_jira_fetcher,
 )
@@ -1446,6 +1448,65 @@ class TestResolveBearerAuthType:
         )
         result = _resolve_bearer_auth_type(config, "oauth")
         assert result == "pat"
+
+
+class TestConnectionStatusHelpers:
+    """Tests for diagnostic connection-status helpers."""
+
+    @patch("mcp_atlassian.servers.dependencies._get_fetcher", new_callable=AsyncMock)
+    async def test_check_jira_connection_status_success(
+        self, mock_get_fetcher, mock_context, config_factory
+    ):
+        """Jira status reports authenticated user details when validation succeeds."""
+        jira_config = config_factory.create_jira_config(auth_type="basic")
+        _setup_mock_context(
+            mock_context,
+            config_factory.create_app_context(jira_config=jira_config),
+        )
+
+        mock_fetcher = MagicMock()
+        mock_fetcher.config = jira_config
+        mock_fetcher.get_current_user_account_id.return_value = "account-123"
+        mock_get_fetcher.return_value = mock_fetcher
+
+        result = await check_jira_connection_status(mock_context)
+
+        assert result == {
+            "configured": True,
+            "connected": True,
+            "authenticated": True,
+            "url": "https://test.atlassian.net",
+            "deployment_type": "cloud",
+            "authenticated_user": "account-123",
+            "error": None,
+            "token_expiry": None,
+        }
+
+    @patch(
+        "mcp_atlassian.servers.dependencies._get_fetcher",
+        new_callable=AsyncMock,
+    )
+    async def test_check_confluence_connection_status_reports_failure(
+        self, mock_get_fetcher, mock_context, config_factory
+    ):
+        """Confluence status keeps config details when fetcher validation fails."""
+        confluence_config = config_factory.create_confluence_config(auth_type="basic")
+        _setup_mock_context(
+            mock_context,
+            config_factory.create_app_context(confluence_config=confluence_config),
+        )
+
+        mock_get_fetcher.side_effect = ValueError("Invalid token")
+
+        result = await check_confluence_connection_status(mock_context)
+
+        assert result["configured"] is True
+        assert result["connected"] is False
+        assert result["authenticated"] is False
+        assert result["url"] == "https://test.atlassian.net"
+        assert result["deployment_type"] == "cloud"
+        assert result["authenticated_user"] is None
+        assert result["error"] == "Invalid token"
 
 
 class TestSsrfProtection:

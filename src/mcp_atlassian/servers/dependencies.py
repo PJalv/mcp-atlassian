@@ -18,7 +18,7 @@ from mcp_atlassian.confluence import ConfluenceConfig, ConfluenceFetcher
 from mcp_atlassian.jira import JiraConfig, JiraFetcher
 from mcp_atlassian.servers.context import MainAppContext
 from mcp_atlassian.utils.oauth import OAuthConfig
-from mcp_atlassian.utils.urls import validate_url_for_ssrf
+from mcp_atlassian.utils.urls import is_atlassian_cloud_url, validate_url_for_ssrf
 
 if TYPE_CHECKING:
     from mcp_atlassian.confluence.config import (
@@ -704,3 +704,129 @@ async def get_confluence_fetcher(ctx: Context) -> ConfluenceFetcher:
         ValueError: If configuration or credentials are invalid.
     """
     return await _get_fetcher(ctx, _confluence_spec())
+
+
+def _empty_connection_status() -> dict[str, Any]:
+    """Return the default connection-status payload."""
+    return {
+        "configured": False,
+        "connected": False,
+        "authenticated": False,
+        "url": None,
+        "deployment_type": None,
+        "authenticated_user": None,
+        "error": None,
+        "token_expiry": None,
+    }
+
+
+def _normalize_authenticated_user(validation_data: Any) -> str | None:
+    """Extract a stable user identifier from validation data."""
+    if isinstance(validation_data, dict):
+        for key in (
+            "email",
+            "accountId",
+            "account_id",
+            "displayName",
+            "username",
+            "name",
+        ):
+            value = validation_data.get(key)
+            if value:
+                return str(value)
+        return None
+
+    if validation_data:
+        return str(validation_data)
+
+    return None
+
+
+def _populate_status_from_config(
+    status: dict[str, Any], config: JiraConfig | ConfluenceConfig | None
+) -> None:
+    """Fill shared status fields from service config."""
+    if not config:
+        return
+
+    status["configured"] = True
+    status["url"] = config.url
+    status["deployment_type"] = (
+        "cloud" if getattr(config, "is_cloud", False) else "server"
+    )
+
+    oauth_config = getattr(config, "oauth_config", None)
+    if (
+        oauth_config is not None
+        and getattr(oauth_config, "expires_at", None) is not None
+    ):
+        status["token_expiry"] = oauth_config.expires_at
+
+
+def _populate_status_from_header_auth(
+    status: dict[str, Any], request: Request | None, spec: _ServiceSpec
+) -> None:
+    """Fill config-independent status fields from per-request service headers."""
+    if request is None:
+        return
+
+    service_headers = getattr(request.state, "atlassian_service_headers", {}) or {}
+    header_url = service_headers.get(spec.url_header)
+    header_token = service_headers.get(spec.token_header)
+    if not header_url or not header_token:
+        return
+
+    status["configured"] = True
+    status["url"] = header_url
+    status["deployment_type"] = (
+        "cloud" if is_atlassian_cloud_url(header_url) else "server"
+    )
+
+
+async def _check_connection_status(ctx: Context, spec: _ServiceSpec) -> dict[str, Any]:
+    """Check connection status for a service using current request/global config."""
+    status = _empty_connection_status()
+
+    request: Request | None = None
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        request = None
+
+    try:
+        base_config = _get_global_config(ctx, spec)
+    except ValueError:
+        base_config = None
+
+    _populate_status_from_config(status, base_config)
+    _populate_status_from_header_auth(status, request, spec)
+
+    try:
+        fetcher = await _get_fetcher(ctx, spec)
+    except Exception as e:
+        if status["configured"]:
+            status["error"] = str(e)
+        return status
+
+    _populate_status_from_config(status, fetcher.config)
+
+    try:
+        validation_data = spec.validate_fn(fetcher)
+    except Exception as e:
+        status["error"] = str(e)
+        return status
+
+    status["connected"] = True
+    status["authenticated"] = True
+    status["authenticated_user"] = _normalize_authenticated_user(validation_data)
+    return status
+
+
+async def check_jira_connection_status(ctx: Context) -> dict[str, Any]:
+    """Check Jira connectivity and authentication status for diagnostics."""
+    return await _check_connection_status(ctx, _jira_spec())
+
+
+async def check_confluence_connection_status(ctx: Context) -> dict[str, Any]:
+    """Check Confluence connectivity and authentication status for diagnostics."""
+    return await _check_connection_status(ctx, _confluence_spec())

@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from mcp_atlassian.servers.main import UserTokenMiddleware, main_mcp
+from mcp_atlassian.servers.main import (
+    UserTokenMiddleware,
+    get_connection_status,
+    main_mcp,
+)
 
 
 @pytest.mark.anyio
@@ -87,6 +91,140 @@ async def test_tool_registration_issue_dates_name():
     tools = await main_mcp.get_tools()
     assert "jira_get_issue_dates" in tools
     assert "jira_jira_get_issue_dates" not in tools
+
+
+@pytest.mark.anyio
+async def test_tool_registration_connection_status_name():
+    """Ensure the root diagnostic tool is registered on the main server."""
+    tools = await main_mcp.get_tools()
+    assert "get_connection_status" in tools
+
+
+@pytest.mark.anyio
+async def test_get_connection_status_healthy():
+    """Healthy is returned when all configured services authenticate successfully."""
+    with (
+        patch(
+            "mcp_atlassian.servers.main.check_jira_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": True,
+                    "connected": True,
+                    "authenticated": True,
+                    "url": "https://jira.example.com",
+                    "deployment_type": "server",
+                    "authenticated_user": "jira-user",
+                    "error": None,
+                    "token_expiry": None,
+                }
+            ),
+        ),
+        patch(
+            "mcp_atlassian.servers.main.check_confluence_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": True,
+                    "connected": True,
+                    "authenticated": True,
+                    "url": "https://conf.example.com",
+                    "deployment_type": "server",
+                    "authenticated_user": "conf-user",
+                    "error": None,
+                    "token_expiry": None,
+                }
+            ),
+        ),
+    ):
+        result = await get_connection_status.fn(MagicMock())
+
+    assert result["overall_status"] == "healthy"
+    assert set(result["services"]) == {"jira", "confluence"}
+    assert result["services"]["jira"]["authenticated"] is True
+    assert result["services"]["confluence"]["authenticated"] is True
+    assert result["timestamp"].endswith("+00:00")
+
+
+@pytest.mark.anyio
+async def test_get_connection_status_degraded():
+    """Degraded is returned when only some configured services authenticate."""
+    with (
+        patch(
+            "mcp_atlassian.servers.main.check_jira_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": True,
+                    "connected": True,
+                    "authenticated": True,
+                    "url": "https://jira.example.com",
+                    "deployment_type": "server",
+                    "authenticated_user": "jira-user",
+                    "error": None,
+                    "token_expiry": None,
+                }
+            ),
+        ),
+        patch(
+            "mcp_atlassian.servers.main.check_confluence_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": True,
+                    "connected": False,
+                    "authenticated": False,
+                    "url": "https://conf.example.com",
+                    "deployment_type": "server",
+                    "authenticated_user": None,
+                    "error": "Invalid token",
+                    "token_expiry": None,
+                }
+            ),
+        ),
+    ):
+        result = await get_connection_status.fn(MagicMock())
+
+    assert result["overall_status"] == "degraded"
+    assert result["services"]["jira"]["authenticated"] is True
+    assert result["services"]["confluence"]["authenticated"] is False
+
+
+@pytest.mark.anyio
+async def test_get_connection_status_omits_unconfigured_services():
+    """Unconfigured services are omitted from the returned service map."""
+    with (
+        patch(
+            "mcp_atlassian.servers.main.check_jira_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": False,
+                    "connected": False,
+                    "authenticated": False,
+                    "url": None,
+                    "deployment_type": None,
+                    "authenticated_user": None,
+                    "error": None,
+                    "token_expiry": None,
+                }
+            ),
+        ),
+        patch(
+            "mcp_atlassian.servers.main.check_confluence_connection_status",
+            new=AsyncMock(
+                return_value={
+                    "configured": False,
+                    "connected": False,
+                    "authenticated": False,
+                    "url": None,
+                    "deployment_type": None,
+                    "authenticated_user": None,
+                    "error": None,
+                    "token_expiry": None,
+                }
+            ),
+        ),
+    ):
+        result = await get_connection_status.fn(MagicMock())
+
+    assert result["overall_status"] == "unavailable"
+    assert result["services"] == {}
 
 
 @pytest.mark.anyio

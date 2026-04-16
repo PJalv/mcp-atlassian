@@ -1,21 +1,24 @@
 """Main FastMCP server setup for Atlassian integration."""
 
+import asyncio
 import base64
 import json
 import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, Literal, Optional
+from datetime import datetime, timezone
+from typing import Annotated, Any, Literal, Optional
 from urllib.parse import urlparse
 
 from cachetools import TTLCache
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp import settings as fastmcp_settings
 from fastmcp.server.event_store import EventStore
 from fastmcp.server.http import StarletteWithLifespan
 from fastmcp.tools import Tool as FastMCPTool
 from mcp.types import Tool as MCPTool
+from pydantic import Field
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -46,6 +49,10 @@ from mcp_atlassian.utils.urls import is_atlassian_cloud_url, validate_url_for_ss
 from .client_storage import build_oauth_client_storage_from_env
 from .confluence import confluence_mcp
 from .context import MainAppContext
+from .dependencies import (
+    check_confluence_connection_status,
+    check_jira_connection_status,
+)
 from .jira import jira_mcp
 from .oauth_proxy import HardenedOAuthProxy, parse_env_list
 
@@ -825,3 +832,44 @@ async def _health_check_route(request: Request) -> JSONResponse:
 
 
 logger.info("Added /healthz endpoint for Kubernetes probes")
+
+
+@main_mcp.tool(
+    tags={"read", "status"},
+    annotations={"title": "Get Connection Status", "readOnlyHint": True},
+)
+async def get_connection_status(
+    ctx: Context,
+    include_unconfigured: Annotated[
+        bool,
+        Field(
+            description="Include unconfigured Jira/Confluence services in the response.",
+        ),
+    ] = False,
+) -> dict[str, Any]:
+    """Return connectivity and authentication status for configured Atlassian services."""
+    jira_status, confluence_status = await asyncio.gather(
+        check_jira_connection_status(ctx),
+        check_confluence_connection_status(ctx),
+    )
+
+    services = {}
+    if include_unconfigured or jira_status["configured"]:
+        services["jira"] = jira_status
+    if include_unconfigured or confluence_status["configured"]:
+        services["confluence"] = confluence_status
+
+    if not services:
+        overall_status = "unavailable"
+    elif all(service.get("authenticated") for service in services.values()):
+        overall_status = "healthy"
+    elif any(service.get("authenticated") for service in services.values()):
+        overall_status = "degraded"
+    else:
+        overall_status = "unavailable"
+
+    return {
+        "overall_status": overall_status,
+        "services": services,
+        "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
