@@ -16,6 +16,33 @@ from .v2_adapter import ConfluenceV2Adapter
 logger = logging.getLogger("mcp-atlassian")
 
 
+def _page_tree_sort_position(value: Any) -> int:
+    """Normalize Confluence page position values for stable sorting."""
+    if value is None:
+        return 999999
+
+    if isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, int):
+        return value
+
+    if isinstance(value, float):
+        return int(value)
+
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 999999
+
+
+def _page_tree_sort_title(value: Any) -> str:
+    """Normalize Confluence page titles for stable sorting."""
+    if value is None:
+        return ""
+    return str(value)
+
+
 class PagesMixin(ConfluenceClient):
     """Mixin for Confluence page operations."""
 
@@ -917,13 +944,14 @@ class PagesMixin(ConfluenceClient):
                     }
                 )
 
-            # Sort by depth first (breadth-first), then by position
-            # Note: position can be 0 (valid), so check for None explicitly
+            # Sort by depth first (breadth-first), then by position and title.
+            # Confluence may return mixed types for position/title on some instances,
+            # so normalize before comparison.
             result_pages.sort(
                 key=lambda p: (
                     p["depth"],
-                    p["position"] if p["position"] is not None else 999999,
-                    p["title"],
+                    _page_tree_sort_position(p["position"]),
+                    _page_tree_sort_title(p["title"]),
                 )
             )
 

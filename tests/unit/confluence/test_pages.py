@@ -2713,6 +2713,37 @@ class TestPageHierarchy:
         assert pages[1]["id"] == "456"  # position 1
         assert pages[2]["id"] == "789"  # position 2
 
+    def test_get_space_page_tree_sorting_mixed_position_types(self, pages_mixin):
+        """Test sorting handles string, int, and missing positions safely."""
+        mock_pages = [
+            {
+                "id": "c",
+                "title": "Third",
+                "ancestors": [],
+                "extensions": {"position": None},
+            },
+            {
+                "id": "b",
+                "title": None,
+                "ancestors": [],
+                "extensions": {"position": "1"},
+            },
+            {
+                "id": "a",
+                "title": "First",
+                "ancestors": [],
+                "extensions": {"position": 0},
+            },
+        ]
+        pages_mixin.confluence.get_all_pages_from_space_raw = MagicMock(
+            return_value=self._raw_response(mock_pages)
+        )
+
+        result = pages_mixin.get_space_page_tree("TEST")
+
+        pages = result["pages"]
+        assert [page["id"] for page in pages] == ["a", "b", "c"]
+
     def test_pagination_multiple_batches(self, pages_mixin):
         """Test that pagination fetches across multiple API batches."""
         batch1 = [
