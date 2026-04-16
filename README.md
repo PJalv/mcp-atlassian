@@ -59,6 +59,32 @@ Ask your AI assistant to:
 - **"Create a bug ticket for the login issue"**
 - **"Update the status of PROJ-123 to Done"**
 
+## Nix Support
+
+This fork includes Nix support for reproducible local execution.
+
+### Run directly with flakes
+
+```bash
+nix run github:PJalv/mcp-atlassian -- --help
+```
+
+### Development shell
+
+```bash
+nix develop
+uv sync --frozen --all-extras --dev
+uv run mcp-atlassian
+```
+
+### Legacy shell.nix
+
+```bash
+nix-shell
+uv sync --frozen
+uv run mcp-atlassian
+```
+
 ## Documentation
 
 Full documentation is available at **[mcp-atlassian.soomiles.com](https://mcp-atlassian.soomiles.com)**.
