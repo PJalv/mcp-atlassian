@@ -76,6 +76,12 @@ def mock_jira_fetcher():
 
     mock_fetcher.get_issue_comments.side_effect = mock_get_issue_comments
 
+    mock_fetcher.add_comment.return_value = {
+        "id": "10001",
+        "body": "Test comment",
+        "author": "Test User",
+    }
+
     # Configure search_issues to return fixture data
     def mock_search_issues(jql, **kwargs):
         mock_search_result = MagicMock()
@@ -1989,6 +1995,30 @@ async def test_add_comment(jira_client, mock_jira_fetcher):
     response = await jira_client.call_tool(
         "jira_add_comment",
         {"issue_key": "TEST-123", "body": "Test comment body"},
+    )
+
+    mock_jira_fetcher.add_comment.assert_called_once_with(
+        "TEST-123", "Test comment body", None, public=None
+    )
+
+    result = json.loads(response.content[0].text)
+    assert result["id"] == "10001"
+    assert result["body"] == "Test comment body"
+
+
+@pytest.mark.anyio
+async def test_add_comment_normalizes_empty_optional_params(
+    jira_client, mock_jira_fetcher
+):
+    """Test wrapper defaults are treated as omitted optional comment params."""
+    response = await jira_client.call_tool(
+        "jira_add_comment",
+        {
+            "issue_key": "TEST-123",
+            "body": "Test comment body",
+            "visibility": "",
+            "public": False,
+        },
     )
 
     mock_jira_fetcher.add_comment.assert_called_once_with(

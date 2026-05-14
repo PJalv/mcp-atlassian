@@ -55,7 +55,7 @@ def _parse_visibility(
     Raises:
         ValueError: If the input is not valid JSON or not a dict.
     """
-    if visibility is None:
+    if visibility in (None, "", "{}"):
         return None
     try:
         parsed = json.loads(visibility)
@@ -1779,6 +1779,8 @@ async def add_comment(
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
+    visibility = None if visibility in ("", "{}") else visibility
+    public = None if public is False else public
     visibility_dict = _parse_visibility(visibility)
     result = jira.add_comment(issue_key, body, visibility_dict, public=public)
     return json.dumps(result, indent=2, ensure_ascii=False)
