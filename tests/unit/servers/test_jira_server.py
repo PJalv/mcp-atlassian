@@ -76,6 +76,12 @@ def mock_jira_fetcher():
 
     mock_fetcher.get_issue_comments.side_effect = mock_get_issue_comments
 
+    mock_fetcher.add_comment.return_value = {
+        "id": "10001",
+        "body": "Test comment",
+        "author": "Test User",
+    }
+
     # Configure search_issues to return fixture data
     def mock_search_issues(jql, **kwargs):
         mock_search_result = MagicMock()
@@ -500,6 +506,54 @@ async def test_create_issue(jira_client, mock_jira_fetcher):
         assignee=None,
         components=["Frontend", "API"],
         priority={"name": "Medium"},
+    )
+
+
+@pytest.mark.anyio
+async def test_add_comment_with_comment(jira_client, mock_jira_fetcher):
+    """Test adding a comment with the existing comment parameter."""
+    response = await jira_client.call_tool(
+        "jira_add_comment",
+        {
+            "issue_key": "TEST-123",
+            "comment": "Existing parameter comment",
+        },
+    )
+
+    assert isinstance(response, list)
+    assert len(response) > 0
+    text_content = response[0]
+    assert text_content.type == "text"
+    content = json.loads(text_content.text)
+    assert content["id"] == "10001"
+    mock_jira_fetcher.add_comment.assert_called_once_with(
+        "TEST-123", "Existing parameter comment"
+    )
+
+
+@pytest.mark.anyio
+async def test_add_comment_with_body_and_empty_optional_params(
+    jira_client, mock_jira_fetcher
+):
+    """Test adding a comment with upstream-style body and wrapper defaults."""
+    response = await jira_client.call_tool(
+        "jira_add_comment",
+        {
+            "issue_key": "TEST-123",
+            "body": "Upstream parameter comment",
+            "visibility": "",
+            "public": False,
+        },
+    )
+
+    assert isinstance(response, list)
+    assert len(response) > 0
+    text_content = response[0]
+    assert text_content.type == "text"
+    content = json.loads(text_content.text)
+    assert content["id"] == "10001"
+    mock_jira_fetcher.add_comment.assert_called_once_with(
+        "TEST-123", "Upstream parameter comment"
     )
 
 

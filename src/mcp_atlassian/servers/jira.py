@@ -984,7 +984,22 @@ async def delete_issue(
 async def add_comment(
     ctx: Context,
     issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
-    comment: Annotated[str, Field(description="Comment text in Markdown format")],
+    comment: Annotated[
+        str | None,
+        Field(description="Comment text in Markdown format"),
+    ] = None,
+    body: Annotated[
+        str | None,
+        Field(description="Comment text in Markdown format"),
+    ] = None,
+    visibility: Annotated[
+        str | None,
+        Field(description="Ignored compatibility parameter for upstream clients"),
+    ] = None,
+    public: Annotated[
+        bool | None,
+        Field(description="Ignored compatibility parameter for upstream clients"),
+    ] = None,
 ) -> str:
     """Add a comment to a Jira issue.
 
@@ -992,6 +1007,11 @@ async def add_comment(
         ctx: The FastMCP context.
         issue_key: Jira issue key.
         comment: Comment text in Markdown.
+        body: Alias for comment, matching newer upstream clients.
+        visibility: Compatibility parameter. Visibility-restricted comments are not
+            supported by this implementation.
+        public: Compatibility parameter. Service Desk public/internal comments are
+            not supported by this implementation.
 
     Returns:
         JSON string representing the added comment object.
@@ -999,9 +1019,19 @@ async def add_comment(
     Raises:
         ValueError: If in read-only mode or Jira client unavailable.
     """
+    comment_text = comment if comment is not None else body
+    if not comment_text:
+        raise ValueError("Either comment or body must be provided")
+
+    if visibility not in (None, "", "{}"):
+        raise ValueError("Comment visibility is not supported by this Jira server")
+
+    if public is True:
+        raise ValueError("Public Service Desk comments are not supported by this Jira server")
+
     jira = await get_jira_fetcher(ctx)
     # add_comment returns dict
-    result = jira.add_comment(issue_key, comment)
+    result = jira.add_comment(issue_key, comment_text)
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
