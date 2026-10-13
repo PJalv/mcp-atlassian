@@ -100,6 +100,8 @@ class ConfluencePage(ApiModel, TimestampMixin):
         None  # Page layout width ('full-width', 'max', or 'default')
     )
 
+    layout: dict[str, Any] | None = None
+
     @property
     def page_content(self) -> str:
         """
@@ -243,11 +245,12 @@ class ConfluencePage(ApiModel, TimestampMixin):
             url=url,
             emoji=emoji,
             page_width=page_width,
+            layout=kwargs.get("layout"),
         )
 
     def to_simplified_dict(self) -> dict[str, Any]:
         """Convert to simplified dictionary for API response."""
-        result = {
+        result: dict[str, Any] = {
             "id": self.id,
             "title": self.title,
             "type": self.type,
@@ -292,5 +295,7 @@ class ConfluencePage(ApiModel, TimestampMixin):
         # Add page_width if available
         if self.page_width:
             result["page_width"] = self.page_width
+        if self.layout is not None:
+            result["layout"] = self.layout
 
         return result

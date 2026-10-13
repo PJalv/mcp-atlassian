@@ -10,6 +10,13 @@ from requests.exceptions import HTTPError
 from ..models.confluence import ConfluencePage
 from ..utils.decorators import handle_auth_errors
 from .client import ConfluenceClient
+from .layout import (
+    inspect_adf,
+    inspect_storage,
+    layout_state,
+    normalize_width,
+    width_property,
+)
 from .utils import emoji_to_hex_id, extract_emoji_from_property
 from .v2_adapter import ConfluenceV2Adapter
 
@@ -131,7 +138,13 @@ class PagesMixin(ConfluenceClient):
 
             # Fetch page emoji and width from content properties
             emoji = self._get_page_emoji(page_id)
-            page_width = self._get_page_width(page_id)
+            layout = self._read_width_state(page_id)
+            layout["content"] = {
+                "storage": inspect_storage(content)
+                if isinstance(content, str)
+                else {"state": "missing"}
+            }
+            page_width = layout["page_width"]
 
             return ConfluencePage.from_api_response(
                 page,
@@ -142,6 +155,7 @@ class PagesMixin(ConfluenceClient):
                 is_cloud=self.config.is_cloud,
                 emoji=emoji,
                 page_width=page_width,
+                layout=layout,
             )
         except HTTPError:
             raise  # let decorator handle auth errors
@@ -326,85 +340,134 @@ class PagesMixin(ConfluenceClient):
             logger.warning(f"Error setting emoji for page {page_id}: {str(e)}")
             return False
 
+    def _read_width_state(self, page_id: str) -> dict[str, Any]:
+        if not self.config.is_cloud:
+            unavailable = {"state": "unsupported", "raw": None, "label": None}
+            return layout_state(unavailable.copy(), unavailable.copy())
+        adapter = self._v2_adapter or ConfluenceV2Adapter(
+            self.confluence._session, self.confluence.url
+        )
+        states = []
+        for scope in ("published", "draft"):
+            try:
+                states.append(
+                    width_property(
+                        adapter._get_property(page_id, f"content-appearance-{scope}")
+                    )
+                )
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code in (401, 403):
+                    raise
+                states.append({"state": "read_failed", "raw": None, "label": None})
+            except (requests.RequestException, ValueError, TypeError, KeyError):
+                states.append({"state": "read_failed", "raw": None, "label": None})
+        return layout_state(*states)
+
     def _get_page_width(self, page_id: str) -> str | None:
-        """Get the page layout width from content properties.
-
-        The page width (full-width, max, or default) is stored as a content property
-        with key 'content-appearance-published' or 'content-appearance-draft'.
-
-        Args:
-            page_id: The ID of the page
-
-        Returns:
-            The width setting if set ('full-width', 'max', or 'default'), None otherwise
-        """
-        try:
-            # For token/basic auth, use v1 API via atlassian library
-            properties = self.confluence.get_page_properties(page_id)
-            if not properties:
-                return None
-
-            results = properties.get("results", [])
-            for prop in results:
-                key = prop.get("key", "")
-                if key in ("content-appearance-published", "content-appearance-draft"):
-                    value = prop.get("value", {})
-                    # The value is stored as a dict with "value" key or directly as string
-                    if isinstance(value, dict):
-                        return value.get("value")
-                    elif isinstance(value, str):
-                        return value
-
-            return None
-
-        except Exception as e:
-            logger.debug(f"Error fetching page width for page {page_id}: {str(e)}")
-            return None
+        """Read legacy width with published precedence, never infer a default."""
+        value = self._read_width_state(page_id)["page_width"]
+        return value if isinstance(value, str) else None
 
     def _set_page_width(self, page_id: str, width: str | None) -> bool:
-        """Set the page layout width.
+        """Set published width only, without changing the active draft."""
+        result = self.set_page_width(page_id, width or "default")
+        return bool(result["success"])
 
-        The page width is stored as content properties.
-        Both 'content-appearance-draft' and 'content-appearance-published' are set
-        to ensure the width appears in both view and edit modes.
+    @handle_auth_errors("Confluence API")
+    def set_page_width(
+        self, page_id: str, width: str, *, scope: str = "published"
+    ) -> dict[str, Any]:
+        """Write scoped Cloud width metadata and verify it with REST readback.
 
         Args:
-            page_id: The ID of the page
-            width: The width to set ('full-width', 'max', or 'default'), or None to remove
+            page_id: Page whose content must remain unchanged.
+            width: narrow/default, wide/full-width, or max.
+            scope: published, draft, or both. Default leaves active drafts alone.
 
         Returns:
-            True if the operation succeeded, False otherwise
+            Per-scope write and readback results. This is not visual verification.
         """
+        raw = normalize_width(width)
+        if scope not in ("published", "draft", "both"):
+            raise ValueError("scope must be published, draft, or both")
+        if not self.config.is_cloud:
+            raise ValueError("Page width properties are supported only on Cloud")
+        adapter = self._v2_adapter or ConfluenceV2Adapter(
+            self.confluence._session, self.confluence.url
+        )
+        scopes = ("published", "draft") if scope == "both" else (scope,)
+        writes = {
+            item: adapter._set_page_property(page_id, f"content-appearance-{item}", raw)
+            for item in scopes
+        }
         try:
-            # Validate width value
-            if width is not None and width not in ["full-width", "max", "default"]:
-                logger.warning(
-                    f"Invalid page width '{width}'. Must be 'full-width', 'max', or 'default'"
-                )
-                return False
-
-            # Set both published and draft properties
-            published_ok = self._set_single_property(
-                page_id, "content-appearance-published", width
+            readback = self._read_width_state(page_id)
+        except HTTPError:
+            readback = layout_state(
+                {"state": "read_failed", "raw": None, "label": None},
+                {"state": "read_failed", "raw": None, "label": None},
             )
-            draft_ok = self._set_single_property(
-                page_id, "content-appearance-draft", width
-            )
+        verified = {
+            item: readback[item]["state"] == "known" and readback[item]["raw"] == raw
+            for item in scopes
+        }
+        success = all(writes.values()) and all(verified.values())
+        return {
+            "success": success,
+            "partial_write": any(writes.values()) and not all(writes.values()),
+            "writes": writes,
+            "readback_verified": verified,
+            "layout": readback,
+            "rendered_verified": False,
+        }
 
-            if not published_ok:
-                logger.warning(
-                    f"Failed to set content-appearance-published for page {page_id}"
-                )
-            if not draft_ok:
-                logger.warning(
-                    f"Failed to set content-appearance-draft for page {page_id}"
-                )
+    @handle_auth_errors("Confluence API")
+    def get_page_layout(self, page_id: str) -> dict[str, Any]:
+        """Read width metadata and bounded storage/ADF layout evidence.
 
-            return published_ok and draft_ok
+        Args:
+            page_id: Page to inspect through supported REST APIs.
 
-        except Exception as e:
-            logger.warning(f"Error setting page width for page {page_id}: {str(e)}")
-            return False
+        Returns:
+            Independent property/body states without claims about rendered layout.
+        """
+        result = self._read_width_state(page_id)
+        result["content"] = {}
+        formats = (
+            ("storage", "atlas_doc_format") if self.config.is_cloud else ("storage",)
+        )
+        for representation in formats:
+            try:
+                if self.config.is_cloud:
+                    response = self.confluence._session.get(
+                        f"{self.confluence.url}/api/v2/pages/{page_id}",
+                        params={"body-format": representation},
+                    )
+                    response.raise_for_status()
+                    page = response.json()
+                else:
+                    page = self.confluence.get_page_by_id(
+                        page_id, expand="body.storage"
+                    )
+                value = page.get("body", {}).get(representation, {}).get("value")
+                if value is None:
+                    evidence = {"state": "missing"}
+                else:
+                    evidence = (
+                        inspect_storage(value)
+                        if representation == "storage"
+                        else inspect_adf(value)
+                    )
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code in (401, 403):
+                    raise
+                evidence = {"state": "read_failed"}
+            except (requests.RequestException, ValueError, TypeError, KeyError):
+                evidence = {"state": "read_failed"}
+            result["content"][representation] = evidence
+        if not self.config.is_cloud:
+            result["content"]["atlas_doc_format"] = {"state": "unsupported"}
+        return result
 
     def get_page_by_title(
         self, space_key: str, title: str, *, convert_to_markdown: bool = True
@@ -453,7 +516,13 @@ class PagesMixin(ConfluenceClient):
 
             # Fetch page emoji and width from content properties
             emoji = self._get_page_emoji(str(page.get("id", "")))
-            page_width = self._get_page_width(str(page.get("id", "")))
+            layout = self._read_width_state(str(page.get("id", "")))
+            layout["content"] = {
+                "storage": inspect_storage(content)
+                if isinstance(content, str)
+                else {"state": "missing"}
+            }
+            page_width = layout["page_width"]
 
             # Create and return the ConfluencePage model
             return ConfluencePage.from_api_response(
@@ -466,6 +535,7 @@ class PagesMixin(ConfluenceClient):
                 is_cloud=self.config.is_cloud,
                 emoji=emoji,
                 page_width=page_width,
+                layout=layout,
             )
 
         except KeyError as e:
@@ -574,7 +644,7 @@ class PagesMixin(ConfluenceClient):
             enable_heading_anchors: Whether to enable automatic heading anchor generation (default: False, keyword-only)
             content_representation: Content format when is_markdown=False ('wiki' or 'storage', keyword-only)
             emoji: Optional emoji character for the page title icon (keyword-only)
-            page_width: Optional page layout width ('full-width', 'max', or 'default', keyword-only)
+            page_width: Cloud published width. narrow=default, wide=full-width, max=max.
 
         Returns:
             ConfluencePage model containing the new page's data
@@ -583,6 +653,12 @@ class PagesMixin(ConfluenceClient):
             Exception: If there is an error creating the page
         """
         try:
+            if page_width is not None:
+                page_width = normalize_width(page_width or "default")
+                if not self.config.is_cloud:
+                    raise ValueError(
+                        "Page width properties are supported only on Cloud"
+                    )
             # Determine body and representation based on content type
             if is_markdown:
                 # Convert markdown to Confluence storage format
@@ -630,8 +706,11 @@ class PagesMixin(ConfluenceClient):
                 self._set_page_emoji(page_id, emoji)
 
             # Set the page width if provided
-            if page_width:
-                self._set_page_width(page_id, page_width)
+            if page_width is not None and not self._set_page_width(page_id, page_width):
+                raise ValueError(
+                    "Page content was created, but width write/readback failed. "
+                    "Do not retry page creation; inspect layout instead."
+                )
 
             return self.get_page_content(page_id)
         except Exception as e:
@@ -645,9 +724,12 @@ class PagesMixin(ConfluenceClient):
     def update_page(
         self,
         page_id: str,
-        title: str,
-        body: str,
+        title: str | None,
+        body: str | None,
         *,
+        expected_version: int | None = None,
+        old_text: str | None = None,
+        new_text: str | None = None,
         is_minor_edit: bool = False,
         version_comment: str = "",
         is_markdown: bool = True,
@@ -662,8 +744,11 @@ class PagesMixin(ConfluenceClient):
 
         Args:
             page_id: The ID of the page to update
-            title: The new title of the page
-            body: The new content of the page (markdown, wiki markup, or storage format)
+            title: New title, or None to keep the current title.
+            body: New content, or None when replacing an exact storage string.
+            expected_version: Refuse to update unless the page has this version.
+            old_text: Exact storage text to replace once (requires expected_version).
+            new_text: Replacement storage text (requires old_text).
             is_minor_edit: Whether this is a minor edit (keyword-only)
             version_comment: Optional comment for this version (keyword-only)
             is_markdown: Whether the body content is in markdown format (default: True, keyword-only)
@@ -671,7 +756,8 @@ class PagesMixin(ConfluenceClient):
             enable_heading_anchors: Whether to enable automatic heading anchor generation (default: False, keyword-only)
             content_representation: Content format when is_markdown=False ('wiki' or 'storage', keyword-only)
             emoji: Optional emoji character for the page title icon (keyword-only). Pass empty string to remove emoji.
-            page_width: Optional page layout width ('full-width', 'max', or 'default', keyword-only). Pass empty string to reset to default.
+            page_width: Cloud published width. narrow=default, wide=full-width,
+                max=max. Omit to preserve; empty resets published width to default.
 
         Returns:
             ConfluencePage model containing the updated page's data
@@ -680,51 +766,112 @@ class PagesMixin(ConfluenceClient):
             Exception: If there is an error updating the page
         """
         try:
-            # Determine body and representation based on content type
+            if old_text is not None:
+                if (
+                    body is not None
+                    or new_text is None
+                    or not old_text
+                    or expected_version is None
+                ):
+                    raise ValueError(
+                        "Exact replacement requires old_text, new_text and "
+                        "expected_version, and no body"
+                    )
+            elif body is None or new_text is not None:
+                raise ValueError("Provide body or an exact replacement, not both")
+            if expected_version is not None and expected_version < 1:
+                raise ValueError("expected_version must be positive")
+            if page_width is not None:
+                page_width = normalize_width(page_width or "default")
+                if not self.config.is_cloud:
+                    raise ValueError(
+                        "Page width properties are supported only on Cloud"
+                    )
+
+            v2_adapter = self._v2_adapter
+            current = None
+            if title is None or expected_version is not None:
+                if v2_adapter:
+                    current = v2_adapter.get_page(
+                        page_id=page_id, expand="body.storage,version,space"
+                    )
+                else:
+                    current = self.confluence.get_page_by_id(
+                        page_id=page_id, expand="body.storage,version"
+                    )
+                if not isinstance(current, dict):
+                    raise ValueError(f"Could not read page {page_id}")
+                if expected_version is not None:
+                    actual_version = current.get("version", {}).get("number")
+                    if actual_version != expected_version:
+                        raise ValueError(
+                            f"Page version mismatch: expected {expected_version}, "
+                            f"found {actual_version}"
+                        )
+                if title is None:
+                    title = current["title"]
+
+            if old_text is not None:
+                if current is None or new_text is None:
+                    raise ValueError("Exact replacement requires current content")
+                storage = current["body"]["storage"]["value"]
+                if storage.count(old_text) != 1:
+                    raise ValueError("Exact text must occur once in storage content")
+                body = storage.replace(old_text, new_text, 1)
+                is_markdown = False
+                content_representation = "storage"
+
+            if body is None or not isinstance(title, str):
+                raise ValueError("Page content and title must be strings")
             if is_markdown:
-                # Convert markdown to Confluence storage format
                 final_body = self.preprocessor.markdown_to_confluence_storage(
                     body, enable_heading_anchors=enable_heading_anchors
                 )
                 representation = "storage"
             else:
-                # Use body as-is with specified representation
                 final_body = body
                 representation = content_representation or "storage"
 
             logger.debug(f"Updating page {page_id} with title '{title}'")
 
-            # Use v2 API for OAuth authentication, v1 API for token/basic auth
-            v2_adapter = self._v2_adapter
+            # The upstream update helper forces fixed-width metadata. Omit it
+            # and let Confluence reject a stale version in the PUT instead.
             if v2_adapter:
-                logger.debug(
-                    f"Using v2 API for OAuth authentication to update page '{page_id}'"
-                )
-                response = v2_adapter.update_page(
+                v2_adapter.update_page(
                     page_id=page_id,
                     title=title,
                     body=final_body,
                     representation=representation,
                     version_comment=version_comment,
+                    expected_version=expected_version,
                 )
             else:
-                logger.debug(
-                    f"Using v1 API for token/basic authentication to update page '{page_id}'"
-                )
-                update_kwargs = {
-                    "page_id": page_id,
-                    "title": title,
-                    "body": final_body,
+                if current is None:
+                    current = self.confluence.get_page_by_id(
+                        page_id=page_id, expand="version"
+                    )
+                version = current["version"]["number"]
+                data: dict[str, Any] = {
+                    "id": page_id,
                     "type": "page",
-                    "representation": representation,
-                    "minor_edit": is_minor_edit,
-                    "version_comment": version_comment,
-                    "always_update": True,
+                    "title": title,
+                    "body": {
+                        representation: {
+                            "value": final_body,
+                            "representation": representation,
+                        }
+                    },
+                    "version": {"number": version + 1, "minorEdit": is_minor_edit},
                 }
+                if version_comment:
+                    data["version"]["message"] = version_comment
                 if parent_id:
-                    update_kwargs["parent_id"] = parent_id
-
-                self.confluence.update_page(**update_kwargs)
+                    data["ancestors"] = [{"type": "page", "id": parent_id}]
+                self.confluence.put(
+                    f"rest/api/content/{page_id}",
+                    data=data,
+                    params={"status": "current"},
+                )
 
             # Set or remove the page emoji if provided
             if emoji is not None:
@@ -734,9 +881,11 @@ class PagesMixin(ConfluenceClient):
 
             # Set or remove the page width if provided
             if page_width is not None:
-                # Empty string means reset to default, otherwise set it
-                width_to_set = page_width if page_width else None
-                self._set_page_width(page_id, width_to_set)
+                if not self._set_page_width(page_id, page_width):
+                    raise ValueError(
+                        "Page content was updated, but width write/readback failed. "
+                        "Inspect layout before retrying."
+                    )
 
             # After update, refresh the page data
             return self.get_page_content(page_id)

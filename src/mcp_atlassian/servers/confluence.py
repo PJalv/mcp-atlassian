@@ -571,6 +571,13 @@ async def create_page(
             default=None,
         ),
     ] = None,
+    page_width: Annotated[
+        str | None,
+        Field(
+            description="Cloud published width: narrow=default, wide=full-width, "
+            "max=max. Omit for service default; not text/image alignment"
+        ),
+    ] = None,
 ) -> str:
     """Create a new Confluence page.
 
@@ -584,6 +591,7 @@ async def create_page(
         enable_heading_anchors: Whether to enable heading anchors (markdown only).
         include_content: Whether to include page content in the response.
         emoji: Optional page title emoji (icon shown in navigation).
+        page_width: Cloud published width. narrow=default, wide=full-width, max=max.
 
     Returns:
         JSON string representing the created page object.
@@ -618,6 +626,7 @@ async def create_page(
         else False,
         content_representation=content_representation,
         emoji=emoji,
+        page_width=page_width,
     )
     result = page.to_simplified_dict()
     if not include_content:
@@ -630,6 +639,54 @@ async def create_page(
 
 
 @confluence_mcp.tool(
+    tags={"confluence", "read", "toolset:confluence_pages"},
+    annotations={"title": "Get Page Layout", "readOnlyHint": True},
+)
+async def get_page_layout(ctx: Context, page_id: str) -> str:
+    """Read published/draft width and explicit storage/ADF alignment evidence.
+
+    Missing alignment is unspecified, not left or centered. Width is separate
+    from text/image alignment. REST metadata is never visual verification.
+    """
+    fetcher = await get_confluence_fetcher(ctx)
+    return json.dumps(fetcher.get_page_layout(page_id), ensure_ascii=False)
+
+
+@confluence_mcp.tool(
+    tags={"confluence", "write", "toolset:confluence_pages"},
+    annotations={"title": "Set Page Width", "destructiveHint": True},
+)
+@check_write_access
+async def set_page_width(
+    ctx: Context,
+    page_id: str,
+    page_width: Annotated[
+        str,
+        Field(
+            description="narrow=default, wide=full-width, max=max. "
+            "Cloud only; changes width properties, not page content"
+        ),
+    ],
+    scope: Annotated[
+        str,
+        Field(
+            description="published (default), draft, or both. "
+            "Only explicitly selected scopes change; does not publish a draft"
+        ),
+    ] = "published",
+) -> str:
+    """Set width without replacing page content; report writes and REST readback.
+
+    Check success, partial_write, and readback_verified before claiming success.
+    A successful REST readback does not prove the rendered appearance.
+    """
+    fetcher = await get_confluence_fetcher(ctx)
+    return json.dumps(
+        fetcher.set_page_width(page_id, page_width, scope=scope), ensure_ascii=False
+    )
+
+
+@confluence_mcp.tool(
     tags={"confluence", "write", "toolset:confluence_pages"},
     annotations={"title": "Update Page", "destructiveHint": True},
 )
@@ -637,13 +694,43 @@ async def create_page(
 async def update_page(
     ctx: Context,
     page_id: Annotated[str, Field(description="The ID of the page to update")],
-    title: Annotated[str, Field(description="The new title of the page")],
+    title: Annotated[
+        str | None,
+        Field(description="New title. Omit to keep the existing title", default=None),
+    ] = None,
     content: Annotated[
-        str,
+        str | None,
         Field(
-            description="The new content of the page. Format depends on content_format parameter"
+            description="New content. Omit when using old_text/new_text",
+            default=None,
         ),
-    ],
+    ] = None,
+    expected_version: Annotated[
+        int | None,
+        Field(
+            description="Required current version for a guarded update",
+            default=None,
+        ),
+    ] = None,
+    old_text: Annotated[
+        str | None,
+        Field(description="Exact storage-format string to replace once", default=None),
+    ] = None,
+    new_text: Annotated[
+        str | None,
+        Field(description="Replacement storage-format string", default=None),
+    ] = None,
+    page_width: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Published width only: narrow=default, wide=full-width, "
+                "max=max. These are distinct. Omit to preserve width. "
+                "Cloud only; not text/image alignment"
+            ),
+            default=None,
+        ),
+    ] = None,
     is_minor_edit: Annotated[
         bool, Field(description="Whether this is a minor edit", default=False)
     ] = False,
@@ -689,8 +776,12 @@ async def update_page(
     Args:
         ctx: The FastMCP context.
         page_id: The ID of the page to update.
-        title: The new title of the page.
-        content: The new content of the page (format depends on content_format).
+        title: New title, or None to preserve the existing title.
+        content: New content, or None for exact storage replacement.
+        expected_version: Required page version for guarded updates.
+        old_text: Exact storage string to replace once.
+        new_text: Replacement storage string.
+        page_width: Width to set explicitly, or None to preserve it.
         is_minor_edit: Whether this is a minor edit.
         version_comment: Optional comment for this version.
         parent_id: Optional new parent page ID.
@@ -725,6 +816,10 @@ async def update_page(
         page_id=page_id,
         title=title,
         body=content,
+        expected_version=expected_version,
+        old_text=old_text,
+        new_text=new_text,
+        page_width=page_width,
         is_minor_edit=is_minor_edit,
         version_comment=version_comment,
         is_markdown=is_markdown,

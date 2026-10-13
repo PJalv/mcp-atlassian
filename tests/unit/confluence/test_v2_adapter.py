@@ -68,6 +68,16 @@ class TestConfluenceV2Adapter:
         assert result["body"]["storage"]["value"] == "<p>Test content</p>"
         assert result["body"]["storage"]["representation"] == "storage"
 
+    def test_update_page_uses_expected_version(self, v2_adapter, mock_session):
+        """The guarded update must PUT expected_version + 1 without a re-fetch."""
+        response = Mock()
+        response.json.return_value = {"id": "123", "title": "Title"}
+        mock_session.put.return_value = response
+        v2_adapter.update_page("123", "Title", "<p>new</p>", expected_version=7)
+        payload = mock_session.put.call_args.kwargs["json"]
+        assert payload["version"]["number"] == 8
+        mock_session.get.assert_not_called()
+
     def test_get_page_not_found(self, v2_adapter, mock_session):
         """Test page retrieval when page doesn't exist."""
         # Mock a 404 response
@@ -285,3 +295,147 @@ class TestConfluenceV2AdapterComments:
         assert payload["pageId"] == "12345"
         assert "parentCommentId" not in payload
         assert result["id"] == "333444555"
+
+
+class TestContentProperties:
+    @pytest.fixture
+    def session(self):
+        return MagicMock(spec=requests.Session)
+
+    @pytest.fixture
+    def adapter(self, session):
+        return ConfluenceV2Adapter(session, "https://example.atlassian.net/wiki")
+
+    def response(self, data):
+        response = Mock()
+        response.json.return_value = data
+        return response
+
+    def test_lookup_pagination_filters_key_and_never_follows_remote_url(
+        self, adapter, session
+    ):
+        session.get.side_effect = [
+            self.response(
+                {
+                    "results": [{"key": "other", "id": "9"}],
+                    "_links": {"next": "https://untrusted.example/?cursor=next"},
+                }
+            ),
+            self.response({"results": [{"key": "width", "id": "42", "value": "max"}]}),
+        ]
+        assert adapter._get_property("123", "width") == {
+            "key": "width",
+            "id": "42",
+            "value": "max",
+        }
+        assert session.get.call_args.args == (
+            "https://example.atlassian.net/wiki/api/v2/pages/123/properties",
+        )
+        assert session.get.call_args.kwargs["params"] == {
+            "key": "width",
+            "limit": "100",
+            "cursor": "next",
+        }
+
+    @pytest.mark.parametrize("value", ["max", None])
+    def test_update_delete_use_id(self, adapter, session, value):
+        session.get.return_value = self.response(
+            {
+                "results": [
+                    {"key": "width", "id": "42", "version": {"number": 7}},
+                ]
+            }
+        )
+        assert adapter._set_page_property("123", "width", value) is True
+        url = "https://example.atlassian.net/wiki/api/v2/pages/123/properties/42"
+        if value is None:
+            session.delete.assert_called_once_with(url)
+        else:
+            session.put.assert_called_once_with(
+                url,
+                json={
+                    "key": "width",
+                    "value": "max",
+                    "version": {"number": 8},
+                },
+            )
+        session.post.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["max", None])
+    def test_missing_property_create_or_noop(self, adapter, session, value):
+        session.get.return_value = self.response({"results": []})
+        assert adapter._set_page_property("123", "width", value) is True
+        session.put.assert_not_called()
+        session.delete.assert_not_called()
+        if value is None:
+            session.post.assert_not_called()
+        else:
+            session.post.assert_called_once_with(
+                "https://example.atlassian.net/wiki/api/v2/pages/123/properties",
+                json={"key": "width", "value": "max"},
+            )
+
+    @pytest.mark.parametrize(
+        "failure", ["http", "version", "duplicate", "pagination", "malformed"]
+    )
+    def test_uncertain_lookup_never_creates_or_deletes(self, adapter, session, failure):
+        if failure == "http":
+            session.get.side_effect = requests.ConnectionError()
+        else:
+            data = {"results": [{"key": "width", "id": "42"}]}
+            if failure == "duplicate":
+                data["results"] *= 2
+            elif failure == "pagination":
+                data["_links"] = {"next": "?cursor=same"}
+            elif failure == "malformed":
+                data = {}
+            session.get.return_value = self.response(data)
+        assert adapter._set_page_property("123", "width", "max") is False
+        assert adapter._set_page_property("123", "width", None) is False
+        session.put.assert_not_called()
+        session.post.assert_not_called()
+        session.delete.assert_not_called()
+
+    def test_write_error_does_not_fall_back_to_create(self, adapter, session):
+        session.get.return_value = self.response(
+            {
+                "results": [
+                    {"key": "width", "id": "42", "version": {"number": 7}},
+                ]
+            }
+        )
+        session.put.return_value.raise_for_status.side_effect = HTTPError()
+        assert adapter._set_page_property("123", "width", "max") is False
+        session.post.assert_not_called()
+
+    def test_emoji_uses_shared_safe_id_updates(self, adapter, session):
+        session.get.side_effect = [
+            self.response(
+                {
+                    "results": [
+                        {
+                            "key": "emoji-title-published",
+                            "id": "41",
+                            "version": {"number": 2},
+                        }
+                    ]
+                }
+            ),
+            self.response(
+                {
+                    "results": [
+                        {
+                            "key": "emoji-title-draft",
+                            "id": "42",
+                            "version": {"number": 4},
+                        }
+                    ]
+                }
+            ),
+        ]
+        assert adapter.set_page_emoji("123", "😀") is True
+        calls = session.put.call_args_list
+        assert calls[0].args[0].endswith("/properties/41")
+        assert calls[0].kwargs["json"]["version"] == {"number": 3}
+        assert calls[1].args[0].endswith("/properties/42")
+        assert calls[1].kwargs["json"]["version"] == {"number": 5}

@@ -200,9 +200,11 @@ def test_confluence_mcp(mock_confluence_fetcher, mock_base_confluence_config):
         get_page,
         get_page_children,
         get_page_images,
+        get_page_layout,
         get_space_page_tree,
         search,
         search_user,
+        set_page_width,
         update_page,
         upload_attachment,
         upload_attachments,
@@ -227,6 +229,8 @@ def test_confluence_mcp(mock_confluence_fetcher, mock_base_confluence_config):
     confluence_sub_mcp = FastMCP(name="TestConfluenceSubMCP")
     confluence_sub_mcp.add_tool(search)
     confluence_sub_mcp.add_tool(get_page)
+    confluence_sub_mcp.add_tool(get_page_layout)
+    confluence_sub_mcp.add_tool(set_page_width)
     confluence_sub_mcp.add_tool(get_page_children)
     confluence_sub_mcp.add_tool(get_space_page_tree)
     confluence_sub_mcp.add_tool(get_comments)
@@ -269,9 +273,11 @@ def no_fetcher_test_confluence_mcp(mock_base_confluence_config):
         get_page,
         get_page_children,
         get_page_images,
+        get_page_layout,
         get_space_page_tree,
         search,
         search_user,
+        set_page_width,
         update_page,
         upload_attachment,
         upload_attachments,
@@ -298,6 +304,8 @@ def no_fetcher_test_confluence_mcp(mock_base_confluence_config):
     confluence_sub_mcp = FastMCP(name="NoFetcherTestConfluenceSubMCP")
     confluence_sub_mcp.add_tool(search)
     confluence_sub_mcp.add_tool(get_page)
+    confluence_sub_mcp.add_tool(get_page_layout)
+    confluence_sub_mcp.add_tool(set_page_width)
     confluence_sub_mcp.add_tool(get_page_children)
     confluence_sub_mcp.add_tool(get_space_page_tree)
     confluence_sub_mcp.add_tool(get_comments)
@@ -710,6 +718,28 @@ async def test_update_page_with_string_parent_id(client, mock_confluence_fetcher
 
 
 @pytest.mark.anyio
+async def test_update_page_exact_edit(client, mock_confluence_fetcher):
+    response = await client.call_tool(
+        "confluence_update_page",
+        {
+            "page_id": "999999",
+            "expected_version": 4,
+            "old_text": "old",
+            "new_text": "new",
+            "page_width": "max",
+        },
+    )
+    assert not response.is_error
+    kwargs = mock_confluence_fetcher.update_page.call_args.kwargs
+    assert kwargs["title"] is None
+    assert kwargs["body"] is None
+    assert kwargs["expected_version"] == 4
+    assert kwargs["old_text"] == "old"
+    assert kwargs["new_text"] == "new"
+    assert kwargs["page_width"] == "max"
+
+
+@pytest.mark.anyio
 async def test_update_page_include_content(client, mock_confluence_fetcher):
     """Test update_page can include content when requested."""
     response = await client.call_tool(
@@ -963,3 +993,75 @@ async def test_get_page_images_fetch_failure(client, mock_confluence_fetcher):
     summary = json.loads(response.content[0].text)
     assert summary["downloaded"] == 0
     assert len(summary["failed"]) == 1
+
+
+@pytest.mark.anyio
+async def test_layout_tools_and_width_schema(
+    client, mock_confluence_fetcher, test_confluence_mcp
+):
+    registered = await test_confluence_mcp.get_tools()
+    tools = {name: tool.to_mcp_tool() for name, tool in registered.items()}
+    assert tools["confluence_get_page_layout"].annotations.readOnlyHint is True
+    assert tools["confluence_set_page_width"].annotations.destructiveHint is True
+    for name in ("confluence_create_page", "confluence_update_page"):
+        description = tools[name].inputSchema["properties"]["page_width"]["description"]
+        assert "narrow=default" in description
+        assert "wide=full-width" in description
+        assert "max=max" in description
+    mock_confluence_fetcher.get_page_layout.return_value = {
+        "published": {"state": "missing"},
+        "rendered_verified": False,
+    }
+    mock_confluence_fetcher.set_page_width.return_value = {
+        "success": False,
+        "partial_write": True,
+        "rendered_verified": False,
+    }
+    response = await client.call_tool("confluence_get_page_layout", {"page_id": "123"})
+    assert json.loads(response.content[0].text)["rendered_verified"] is False
+    response = await client.call_tool(
+        "confluence_set_page_width",
+        {
+            "page_id": "123",
+            "page_width": "wide",
+        },
+    )
+    assert json.loads(response.content[0].text)["success"] is False
+    mock_confluence_fetcher.set_page_width.assert_called_once_with(
+        "123",
+        "wide",
+        scope="published",
+    )
+
+
+@pytest.mark.anyio
+async def test_create_page_exposes_width(client, mock_confluence_fetcher):
+    await client.call_tool(
+        "confluence_create_page",
+        {
+            "space_key": "TEST",
+            "title": "Title",
+            "content": "body",
+            "page_width": "narrow",
+        },
+    )
+    assert (
+        mock_confluence_fetcher.create_page.call_args.kwargs["page_width"] == "narrow"
+    )
+
+
+@pytest.mark.anyio
+async def test_width_setter_read_only_guard(mock_confluence_fetcher):
+    from src.mcp_atlassian.servers.confluence import set_page_width
+
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context = {
+        "app_lifespan_context": MainAppContext(read_only=True),
+    }
+    with patch(
+        "src.mcp_atlassian.servers.confluence.get_confluence_fetcher",
+        AsyncMock(return_value=mock_confluence_fetcher),
+    ):
+        with pytest.raises(Exception, match="read-only mode"):
+            await set_page_width.fn(ctx, "123", "wide")
+    mock_confluence_fetcher.set_page_width.assert_not_called()

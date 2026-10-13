@@ -370,6 +370,7 @@ class TestPagesMixin:
             space={"key": "PROJ", "name": "Project"},
             version={"number": 1},  # Add version information
         )
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
         with patch.object(pages_mixin, "get_page_content", return_value=mock_document):
             # Act - specify is_markdown=False since we're directly providing storage format
             result = pages_mixin.update_page(
@@ -384,21 +385,119 @@ class TestPagesMixin:
             # Assert
             # Verify update_page was called with the correct arguments
             # We now include type='page' and always_update=True parameters
-            pages_mixin.confluence.update_page.assert_called_once_with(
-                page_id=page_id,
-                title=title,
-                body=body,
-                type="page",
-                representation="storage",
-                minor_edit=is_minor_edit,
-                version_comment=version_comment,
-                always_update=True,
+            pages_mixin.confluence.put.assert_called_once_with(
+                f"rest/api/content/{page_id}",
+                data={
+                    "id": page_id,
+                    "type": "page",
+                    "title": title,
+                    "body": {"storage": {"value": body, "representation": "storage"}},
+                    "version": {
+                        "number": 2,
+                        "minorEdit": True,
+                        "message": version_comment,
+                    },
+                },
+                params={"status": "current"},
             )
+
+    def test_update_preserves_title_and_width(self, pages_mixin):
+        """An omitted title and width must not be reset by the v1 PUT."""
+        pages_mixin.confluence.get_page_by_id.return_value = {
+            "title": "Original title",
+            "version": {"number": 4},
+            "body": {"storage": {"value": "<p>old</p>"}},
+        }
+        with patch.object(pages_mixin, "get_page_content"):
+            pages_mixin.update_page("123", None, "<p>new</p>", is_markdown=False)
+        payload = pages_mixin.confluence.put.call_args.kwargs["data"]
+        assert payload["title"] == "Original title"
+        assert payload["version"]["number"] == 5
+        assert "metadata" not in payload
+
+    def test_explicit_max_width(self, pages_mixin):
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
+        with (
+            patch.object(pages_mixin, "get_page_content"),
+            patch.object(pages_mixin, "_set_page_width") as set_width,
+        ):
+            pages_mixin.update_page(
+                "123",
+                "Title",
+                "<p>body</p>",
+                is_markdown=False,
+                page_width="max",
+            )
+        set_width.assert_called_once_with("123", "max")
+
+    def test_exact_edit_requires_matching_version(self, pages_mixin):
+        """A stale edit does not send a write request."""
+        pages_mixin.confluence.get_page_by_id.return_value = {
+            "title": "Original",
+            "version": {"number": 6},
+            "body": {"storage": {"value": "<p>old</p>"}},
+        }
+        with pytest.raises(Exception, match="version mismatch"):
+            pages_mixin.update_page(
+                "123",
+                None,
+                None,
+                old_text="old",
+                new_text="new",
+                expected_version=5,
+            )
+        pages_mixin.confluence.put.assert_not_called()
+
+    def test_exact_edit_updates_storage_once(self, pages_mixin):
+        """Small edits do not reconvert storage through Markdown."""
+        pages_mixin.confluence.get_page_by_id.return_value = {
+            "title": "Original",
+            "version": {"number": 6},
+            "body": {"storage": {"value": "<p>old</p>"}},
+        }
+        with patch.object(pages_mixin, "get_page_content"):
+            pages_mixin.update_page(
+                "123",
+                None,
+                None,
+                old_text="old",
+                new_text="new",
+                expected_version=6,
+            )
+        payload = pages_mixin.confluence.put.call_args.kwargs["data"]
+        assert payload["body"]["storage"]["value"] == "<p>new</p>"
+        assert payload["version"]["number"] == 7
+        assert payload["title"] == "Original"
+        assert "metadata" not in payload
+        pages_mixin.preprocessor.markdown_to_confluence_storage.assert_not_called()
+
+    def test_exact_edit_rejects_missing_version(self, pages_mixin):
+        with pytest.raises(Exception, match="requires old_text"):
+            pages_mixin.update_page("123", None, None, old_text="old", new_text="new")
+        pages_mixin.confluence.put.assert_not_called()
+
+    def test_exact_edit_rejects_ambiguous_match(self, pages_mixin):
+        pages_mixin.confluence.get_page_by_id.return_value = {
+            "title": "Original",
+            "version": {"number": 6},
+            "body": {"storage": {"value": "old old"}},
+        }
+        with pytest.raises(Exception, match="occur once"):
+            pages_mixin.update_page(
+                "123",
+                None,
+                None,
+                old_text="old",
+                new_text="new",
+                expected_version=6,
+            )
+        pages_mixin.confluence.put.assert_not_called()
 
     def test_update_page_error(self, pages_mixin):
         """Test error handling when updating a page."""
         # Arrange
-        pages_mixin.confluence.update_page.side_effect = Exception("API Error")
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
+        pages_mixin.confluence.put.side_effect = Exception("API Error")
 
         # Act/Assert
         with pytest.raises(Exception, match="Failed to update page"):
@@ -420,6 +519,7 @@ class TestPagesMixin:
             space={"key": "PROJ", "name": "Project"},
             version={"number": 2},
         )
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
         with patch.object(pages_mixin, "get_page_content", return_value=mock_document):
             # Act - use wiki format
             result = pages_mixin.update_page(
@@ -432,16 +532,14 @@ class TestPagesMixin:
             )
 
             # Assert
-            pages_mixin.confluence.update_page.assert_called_once_with(
-                page_id=page_id,
-                title=title,
-                body=wiki_body,  # Should be passed as-is
-                type="page",
-                representation="wiki",  # Should use wiki representation
-                minor_edit=False,
-                version_comment=version_comment,
-                always_update=True,
-            )
+            payload = pages_mixin.confluence.put.call_args.kwargs["data"]
+            assert payload["body"]["wiki"]["value"] == wiki_body
+            assert payload["version"] == {
+                "number": 2,
+                "minorEdit": False,
+                "message": version_comment,
+            }
+            assert "metadata" not in payload
 
             # Verify no markdown conversion happened
             pages_mixin.preprocessor.markdown_to_confluence_storage.assert_not_called()
@@ -814,6 +912,7 @@ class TestPagesMixin:
         )
 
         # Mock get_page_content
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
         with patch.object(
             pages_mixin,
             "get_page_content",
@@ -841,16 +940,13 @@ class TestPagesMixin:
             )
 
             # Verify update_page was called with the converted content
-            pages_mixin.confluence.update_page.assert_called_once_with(
-                page_id=page_id,
-                title=title,
-                body=storage_format,
-                type="page",
-                representation="storage",
-                minor_edit=True,
-                version_comment="Updated test",
-                always_update=True,
-            )
+            payload = pages_mixin.confluence.put.call_args.kwargs["data"]
+            assert payload["body"]["storage"]["value"] == storage_format
+            assert payload["version"] == {
+                "number": 2,
+                "minorEdit": True,
+                "message": "Updated test",
+            }
 
     def test_update_page_with_parent_id(self, pages_mixin):
         """Test updating a page and changing its parent."""
@@ -870,6 +966,7 @@ class TestPagesMixin:
             space={"key": "PROJ", "name": "Project"},
             version={"number": 2},
         )
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
         with patch.object(pages_mixin, "get_page_content", return_value=mock_document):
             # Act
             result = pages_mixin.update_page(
@@ -883,17 +980,14 @@ class TestPagesMixin:
             )
 
             # Assert
-            pages_mixin.confluence.update_page.assert_called_once_with(
-                page_id=page_id,
-                title=title,
-                body=body,
-                type="page",
-                representation="storage",
-                minor_edit=is_minor_edit,
-                version_comment=version_comment,
-                always_update=True,
-                parent_id=parent_id,
-            )
+            payload = pages_mixin.confluence.put.call_args.kwargs["data"]
+            assert payload["ancestors"] == [{"type": "page", "id": parent_id}]
+            assert payload["version"] == {
+                "number": 2,
+                "minorEdit": False,
+                "message": version_comment,
+            }
+            assert "metadata" not in payload
             assert result.id == page_id
             assert result.title == title
             assert result.version.number == 2
@@ -1406,6 +1500,7 @@ class TestPagesOAuthMixin:
                     body=body,
                     representation="storage",
                     version_comment=version_comment,
+                    expected_version=None,
                 )
 
                 # Verify v1 API was NOT called
@@ -2396,160 +2491,271 @@ class TestPageWidth:
             mixin.preprocessor = confluence_client.preprocessor
             return mixin
 
-    def test_get_page_width_full_width(self, pages_mixin):
-        """Test getting full-width page layout."""
-        page_id = "page_full_width_123"
-
-        mock_properties = {
-            "results": [{"key": "content-appearance-published", "value": "full-width"}]
-        }
-
-        with patch.object(pages_mixin.confluence, "get_page_properties") as mock_get:
-            mock_get.return_value = mock_properties
-
-            result = pages_mixin._get_page_width(page_id)
-
-            mock_get.assert_called_once_with(page_id)
-            assert result == "full-width"
-
-    def test_get_page_width_fixed_width(self, pages_mixin):
-        """Test getting max page layout."""
-        page_id = "page_fixed_width_123"
-
-        mock_properties = {
-            "results": [{"key": "content-appearance-draft", "value": "max"}]
-        }
-
-        with patch.object(pages_mixin.confluence, "get_page_properties") as mock_get:
-            mock_get.return_value = mock_properties
-
-            result = pages_mixin._get_page_width(page_id)
-
-            mock_get.assert_called_once_with(page_id)
-            assert result == "max"
-
-    def test_get_page_width_not_set(self, pages_mixin):
-        """Test getting page width when no property is set."""
-        page_id = "page_no_width_123"
-
-        mock_properties = {"results": [{"key": "other-property", "value": "value"}]}
-
-        with patch.object(pages_mixin.confluence, "get_page_properties") as mock_get:
-            mock_get.return_value = mock_properties
-
-            result = pages_mixin._get_page_width(page_id)
-
-            assert result is None
-
-    def test_set_page_width_full_width_new_property(self, pages_mixin):
-        """Test setting page to full-width when property doesn't exist yet."""
-        page_id = "page_set_full_123"
-
-        with (
-            patch.object(
-                pages_mixin.confluence,
-                "get_page_property",
-                side_effect=Exception("Not found"),
-            ),
-            patch.object(pages_mixin.confluence, "set_page_property") as mock_set,
-        ):
-            result = pages_mixin._set_page_width(page_id, "full-width")
-
-            assert mock_set.call_count == 2
-            calls = mock_set.call_args_list
-            assert calls[0][0][0] == page_id
-            assert calls[0][0][1]["key"] == "content-appearance-published"
-            assert calls[0][0][1]["value"] == "full-width"
-            assert "version" not in calls[0][0][1]
-            assert calls[1][0][1]["key"] == "content-appearance-draft"
-            assert result is True
-
-    def test_set_page_width_full_width_existing_property(self, pages_mixin):
-        """Test setting page to full-width when property already exists."""
-        page_id = "page_set_full_existing_123"
-
-        existing_property = {
-            "key": "content-appearance-published",
-            "value": "default",
-            "version": {"number": 3},
-        }
-
-        with (
-            patch.object(
-                pages_mixin.confluence,
-                "get_page_property",
-                return_value=existing_property,
-            ),
-            patch.object(pages_mixin.confluence, "update_page_property") as mock_update,
-        ):
-            result = pages_mixin._set_page_width(page_id, "full-width")
-
-            assert mock_update.call_count == 2
-            calls = mock_update.call_args_list
-            assert calls[0][0][0] == page_id
-            assert calls[0][0][1]["key"] == "content-appearance-published"
-            assert calls[0][0][1]["value"] == "full-width"
-            assert calls[0][0][1]["version"] == {"number": 4}
-            assert result is True
-
-    def test_set_page_width_max(self, pages_mixin):
-        """Test setting page to max."""
-        page_id = "page_set_max_123"
-
-        with (
-            patch.object(
-                pages_mixin.confluence,
-                "get_page_property",
-                side_effect=Exception("Not found"),
-            ),
-            patch.object(pages_mixin.confluence, "set_page_property") as mock_set,
-        ):
-            result = pages_mixin._set_page_width(page_id, "max")
-
-            assert mock_set.call_count == 2
-            calls = mock_set.call_args_list
-            assert calls[0][0][1]["value"] == "max"
-            assert result is True
-
-    def test_set_page_width_default(self, pages_mixin):
-        """Test setting page to default width."""
-        page_id = "page_set_default_123"
-
-        with (
-            patch.object(
-                pages_mixin.confluence,
-                "get_page_property",
-                side_effect=Exception("Not found"),
-            ),
-            patch.object(pages_mixin.confluence, "set_page_property") as mock_set,
-        ):
-            result = pages_mixin._set_page_width(page_id, "default")
-
-            assert mock_set.call_count == 2
-            calls = mock_set.call_args_list
-            assert calls[0][0][1]["value"] == "default"
-            assert calls[1][0][1]["value"] == "default"
-            assert result is True
-
-    def test_set_page_width_invalid_value(self, pages_mixin):
-        """Test that invalid width values are rejected."""
-        page_id = "page_invalid_width_123"
-
-        result = pages_mixin._set_page_width(page_id, "invalid-width")
-
-        assert result is False
-
-    def test_set_page_width_remove(self, pages_mixin):
-        """Test removing page width (reset to default)."""
-        page_id = "page_remove_width_123"
+    @pytest.mark.parametrize(
+        "raw,label",
+        [
+            ("default", "narrow"),
+            ("full-width", "wide"),
+            ("max", "max"),
+        ],
+    )
+    def test_width_mapping_published_precedence(self, pages_mixin, raw, label):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
 
         with patch.object(
-            pages_mixin.confluence, "delete_page_property"
-        ) as mock_delete:
-            result = pages_mixin._set_page_width(page_id, None)
+            ConfluenceV2Adapter,
+            "_get_property",
+            side_effect=[
+                {"value": raw},
+                {"value": "max" if raw != "max" else "default"},
+            ],
+        ):
+            state = pages_mixin._read_width_state("123")
+        assert state["page_width"] == raw
+        assert state["published"] == {"state": "known", "raw": raw, "label": label}
+        assert state["conflict"] is True
+        assert state["rendered_verified"] is False
 
-            assert mock_delete.call_count == 2
-            assert result is True
+    @pytest.mark.parametrize(
+        "published,draft,expected",
+        [
+            (None, None, None),
+            (None, {"value": {"value": "max"}}, "max"),
+            ({"value": "future-width"}, {"value": "max"}, None),
+        ],
+    )
+    def test_missing_unknown_width(self, pages_mixin, published, draft, expected):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with patch.object(
+            ConfluenceV2Adapter, "_get_property", side_effect=[published, draft]
+        ):
+            state = pages_mixin._read_width_state("123")
+        assert state["page_width"] == expected
+        assert state["published"]["state"] == (
+            "missing" if published is None else "unknown"
+        )
+        assert state["published"]["raw"] == (
+            None if published is None else "future-width"
+        )
+
+    def test_property_read_failure_not_missing(self, pages_mixin):
+        from requests import ConnectionError
+
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with patch.object(
+            ConfluenceV2Adapter,
+            "_get_property",
+            side_effect=[
+                ConnectionError(),
+                {"value": "max"},
+            ],
+        ):
+            state = pages_mixin._read_width_state("123")
+        assert state["published"]["state"] == "read_failed"
+        assert state["draft"]["state"] == "known"
+        assert state["page_width"] is None
+        assert state["conflict"] is None
+
+    @pytest.mark.parametrize(
+        "width,raw",
+        [
+            ("narrow", "default"),
+            ("wide", "full-width"),
+            ("max", "max"),
+            ("default", "default"),
+            ("full-width", "full-width"),
+        ],
+    )
+    def test_width_only_preserves_body_draft(self, pages_mixin, width, raw):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with (
+            patch.object(
+                ConfluenceV2Adapter, "_set_page_property", return_value=True
+            ) as write,
+            patch.object(
+                ConfluenceV2Adapter,
+                "_get_property",
+                side_effect=[
+                    {"value": raw},
+                    {"value": "max"},
+                ],
+            ),
+        ):
+            result = pages_mixin.set_page_width("123", width)
+        write.assert_called_once_with("123", "content-appearance-published", raw)
+        assert result["success"] is True
+        assert result["readback_verified"] == {"published": True}
+        assert result["rendered_verified"] is False
+        pages_mixin.confluence.put.assert_not_called()
+        pages_mixin.confluence.update_page.assert_not_called()
+
+    def test_draft_only_scope(self, pages_mixin):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with (
+            patch.object(
+                ConfluenceV2Adapter, "_set_page_property", return_value=True
+            ) as write,
+            patch.object(
+                ConfluenceV2Adapter,
+                "_get_property",
+                side_effect=[
+                    {"value": "default"},
+                    {"value": "max"},
+                ],
+            ),
+        ):
+            result = pages_mixin.set_page_width("123", "max", scope="draft")
+        write.assert_called_once_with("123", "content-appearance-draft", "max")
+        assert result["success"] is True
+        assert result["readback_verified"] == {"draft": True}
+        assert result["layout"]["page_width"] == "default"
+
+    def test_invalid_scope_never_writes(self, pages_mixin):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with patch.object(ConfluenceV2Adapter, "_set_page_property") as write:
+            with pytest.raises(ValueError, match="scope must"):
+                pages_mixin.set_page_width("123", "max", scope="invalid")
+        write.assert_not_called()
+
+    def test_partial_write_report(self, pages_mixin):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with (
+            patch.object(
+                ConfluenceV2Adapter, "_set_page_property", side_effect=[True, False]
+            ),
+            patch.object(
+                ConfluenceV2Adapter,
+                "_get_property",
+                side_effect=[
+                    {"value": "max"},
+                    {"value": "default"},
+                ],
+            ),
+        ):
+            result = pages_mixin.set_page_width("123", "max", scope="both")
+        assert result["success"] is False
+        assert result["partial_write"] is True
+        assert result["writes"] == {"published": True, "draft": False}
+        assert result["readback_verified"] == {"published": True, "draft": False}
+
+    def test_readback_failure_report(self, pages_mixin):
+        from requests import ConnectionError
+
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        with (
+            patch.object(ConfluenceV2Adapter, "_set_page_property", return_value=True),
+            patch.object(
+                ConfluenceV2Adapter, "_get_property", side_effect=ConnectionError()
+            ),
+        ):
+            result = pages_mixin.set_page_width("123", "max")
+        assert result["success"] is False
+        assert result["writes"] == {"published": True}
+        assert result["readback_verified"] == {"published": False}
+        assert result["layout"]["published"]["state"] == "read_failed"
+
+    @pytest.mark.parametrize("operation", ["create", "update", "width"])
+    def test_invalid_width_before_mutation(self, pages_mixin, operation):
+        with pytest.raises(Exception, match="page_width must"):
+            if operation == "create":
+                pages_mixin.create_page("TEST", "Title", "body", page_width="invalid")
+            elif operation == "update":
+                pages_mixin.update_page("123", "Title", "body", page_width="invalid")
+            else:
+                pages_mixin.set_page_width("123", "invalid")
+        pages_mixin.confluence.create_page.assert_not_called()
+        pages_mixin.confluence.put.assert_not_called()
+        pages_mixin.preprocessor.markdown_to_confluence_storage.assert_not_called()
+
+    def test_server_width_unsupported(self, pages_mixin):
+        pages_mixin.config.url = "https://confluence.example.com"
+        assert (
+            pages_mixin._read_width_state("123")["published"]["state"] == "unsupported"
+        )
+        with pytest.raises(ValueError, match="only on Cloud"):
+            pages_mixin.set_page_width("123", "wide")
+
+    @pytest.mark.parametrize("operation", ["create", "update"])
+    def test_content_write_width_failure(self, pages_mixin, operation):
+        pages_mixin.confluence.create_page.return_value = {"id": "123"}
+        pages_mixin.confluence.get_page_by_id.return_value = {"version": {"number": 1}}
+        with patch.object(pages_mixin, "_set_page_width", return_value=False):
+            with pytest.raises(
+                Exception, match="content was .*width write/readback failed"
+            ):
+                if operation == "create":
+                    pages_mixin.create_page("TEST", "Title", "body", page_width="wide")
+                else:
+                    pages_mixin.update_page("123", "Title", "body", page_width="wide")
+
+    def test_layout_read_fetches_both_formats(self, pages_mixin):
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        storage = MagicMock()
+        storage.json.return_value = {"body": {"storage": {"value": "<p>plain</p>"}}}
+        adf = MagicMock()
+        adf.json.return_value = {
+            "body": {
+                "atlas_doc_format": {
+                    "value": '{"type":"doc","content":[{"type":"paragraph"}]}'
+                }
+            }
+        }
+        pages_mixin.confluence._session.get.side_effect = [storage, adf]
+        with patch.object(ConfluenceV2Adapter, "_get_property", return_value=None):
+            result = pages_mixin.get_page_layout("123")
+        assert result["published"]["state"] == "missing"
+        for representation in ("storage", "atlas_doc_format"):
+            evidence = result["content"][representation]
+            assert evidence["state"] == "read"
+            assert evidence["evidence"][0]["alignment_state"] == "unspecified"
+        assert [
+            call.kwargs["params"]
+            for call in pages_mixin.confluence._session.get.call_args_list
+        ] == [
+            {"body-format": "storage"},
+            {"body-format": "atlas_doc_format"},
+        ]
+
+    def test_layout_body_failure_is_independent(self, pages_mixin):
+        from requests import ConnectionError
+
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+
+        missing = MagicMock()
+        missing.json.return_value = {"body": {}}
+        pages_mixin.confluence._session.get.side_effect = [ConnectionError(), missing]
+        with patch.object(
+            ConfluenceV2Adapter, "_get_property", return_value={"value": "max"}
+        ):
+            result = pages_mixin.get_page_layout("123")
+        assert result["page_width"] == "max"
+        assert result["content"]["storage"] == {"state": "read_failed"}
+        assert result["content"]["atlas_doc_format"] == {"state": "missing"}
+
+    def test_layout_auth_error_uses_decorator(self, pages_mixin):
+        from requests import Response
+        from requests.exceptions import HTTPError
+
+        from mcp_atlassian.confluence.v2_adapter import ConfluenceV2Adapter
+        from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
+
+        response = Response()
+        response.status_code = 403
+        with patch.object(
+            ConfluenceV2Adapter,
+            "_get_property",
+            side_effect=HTTPError(response=response),
+        ):
+            with pytest.raises(MCPAtlassianAuthenticationError):
+                pages_mixin.get_page_layout("123")
 
     def test_get_page_content_includes_width(self, pages_mixin):
         """Test that get_page_content includes page width."""
@@ -2558,7 +2764,7 @@ class TestPageWidth:
         with (
             patch.object(pages_mixin.confluence, "get_page_by_id") as mock_get,
             patch.object(pages_mixin, "_get_page_emoji") as mock_emoji,
-            patch.object(pages_mixin, "_get_page_width") as mock_width,
+            patch.object(pages_mixin, "_read_width_state") as mock_width,
             patch.object(
                 pages_mixin.preprocessor, "process_html_content"
             ) as mock_process,
@@ -2571,7 +2777,10 @@ class TestPageWidth:
                 "space": {"key": "TEST"},
             }
             mock_emoji.return_value = "\U0001f4c4"
-            mock_width.return_value = "full-width"
+            mock_width.return_value = {
+                "page_width": "full-width",
+                "rendered_verified": False,
+            }
             mock_process.return_value = ("<p>Content</p>", "Content")
 
             page = pages_mixin.get_page_content(page_id)
@@ -2975,3 +3184,114 @@ class TestPageHierarchy:
 
         assert result["total_pages"] == 1
         assert result["has_more"] is False
+
+
+class TestLayoutEvidence:
+    def test_storage_alignment_and_unspecified_images(self):
+        from mcp_atlassian.confluence.layout import inspect_storage
+
+        result = inspect_storage(
+            '<h2 style="text-align: center">private text</h2><p>plain</p>'
+            '<ac:image ac:align="end" ac:width="300"><ri:attachment '
+            'ri:filename="private.png" /></ac:image><img width="200" src="private" />'
+            '<ac:layout-section ac:type="two_equal"><ac:layout-cell>'
+            '<table><tr><td colspan="2"><p style="text-align: right">x</p>'
+            "</td></tr></table></ac:layout-cell></ac:layout-section>"
+        )
+        rows = result["evidence"]
+        assert rows[0]["alignment"] == {"text-align": "center"}
+        assert rows[1]["alignment_state"] == "unspecified"
+        assert rows[1]["alignment"] == {}
+        assert rows[2]["alignment"] == {"ac:align": "end"}
+        assert rows[2]["size"] == {"ac:width": "300"}
+        assert rows[3]["alignment_state"] == "unspecified"
+        assert rows[3]["size"] == {"width": "200"}
+        assert rows[4]["structure"] == {"ac:type": "two_equal"}
+        assert rows[-2]["structure"] == {"colspan": "2"}
+        assert rows[-1]["alignment"] == {"text-align": "right"}
+        assert "private" not in str(result)
+        assert inspect_storage("<p>x</p><p>y</p>", limit=1)["truncated"] is True
+
+    @pytest.mark.parametrize("align", ["start", "center", "end"])
+    def test_adf_alignment_marks_nested_tables_and_images(self, align):
+        from mcp_atlassian.confluence.layout import inspect_adf
+
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "heading",
+                    "marks": [
+                        {"type": "alignment", "attrs": {"align": align}},
+                    ],
+                },
+                {
+                    "type": "table",
+                    "content": [
+                        {
+                            "type": "tableRow",
+                            "content": [
+                                {
+                                    "type": "tableCell",
+                                    "content": [
+                                        {
+                                            "type": "paragraph",
+                                            "marks": [
+                                                {
+                                                    "type": "alignment",
+                                                    "attrs": {"align": "end"},
+                                                },
+                                            ],
+                                        },
+                                        {"type": "paragraph"},
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "type": "mediaSingle",
+                    "attrs": {"layout": "align-start", "width": 50},
+                    "content": [
+                        {
+                            "type": "media",
+                            "attrs": {
+                                "id": "private-media",
+                                "width": 300,
+                                "height": 200,
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+        result = inspect_adf(adf)
+        rows = result["evidence"]
+        assert rows[0]["alignment"] == {"mark": align}
+        assert rows[4]["alignment"] == {"mark": "end"}
+        assert rows[4]["path"] == "doc/content/1/content/0/content/0/content/0"
+        assert rows[5]["alignment_state"] == "unspecified"
+        assert rows[6]["alignment"] == {"layout": "align-start"}
+        assert rows[6]["size"] == {"width": 50}
+        assert rows[7]["alignment_state"] == "unspecified"
+        assert rows[7]["size"] == {"width": 300, "height": 200}
+        assert "private-media" not in str(result)
+        assert inspect_adf(adf, limit=1)["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-json",
+        [],
+        {"type": "doc", "content": [None]},
+        {"type": "paragraph", "marks": [None]},
+        {"type": "paragraph", "marks": [{"type": "alignment", "attrs": None}]},
+    ],
+)
+def test_malformed_adf_is_rejected(value):
+    from mcp_atlassian.confluence.layout import inspect_adf
+
+    with pytest.raises(ValueError):
+        inspect_adf(value)

@@ -7,6 +7,7 @@ but still work for API token authentication.
 
 import logging
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from requests.exceptions import HTTPError
@@ -181,6 +182,7 @@ class ConfluenceV2Adapter:
         representation: str = "storage",
         version_comment: str = "",
         status: str = "current",
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
         """Update a page using the v2 API.
 
@@ -191,6 +193,7 @@ class ConfluenceV2Adapter:
             representation: Content representation format (default: "storage")
             version_comment: Optional comment for this version
             status: Page status (default: "current")
+            expected_version: Current version required for this update.
 
         Returns:
             The updated page data from the API response
@@ -200,7 +203,11 @@ class ConfluenceV2Adapter:
         """
         try:
             # Get current version and increment it
-            current_version = self._get_page_version(page_id)
+            current_version = (
+                expected_version
+                if expected_version is not None
+                else self._get_page_version(page_id)
+            )
             new_version = current_version + 1
 
             # Prepare request data for v2 API
@@ -644,52 +651,48 @@ class ConfluenceV2Adapter:
             True if the operation succeeded, False otherwise
         """
         try:
-            if value is None:
-                # Delete the property
-                url = (
-                    f"{self.base_url}/api/v2/pages/{page_id}/properties/{property_key}"
-                )
-                response = self.session.delete(url)
-                # 204 No Content or 404 Not Found are both success cases
-                return response.status_code in [200, 204, 404]
-
-            # Check if the property already exists
             existing_property = self._get_property(page_id, property_key)
-
-            if existing_property:
-                # Update existing property
-                url = (
-                    f"{self.base_url}/api/v2/pages/{page_id}/properties/{property_key}"
+            collection = f"{self.base_url}/api/v2/pages/{page_id}/properties"
+            if existing_property is not None:
+                property_id = existing_property.get("id")
+                version_data = existing_property.get("version", {})
+                version = (
+                    version_data.get("number")
+                    if isinstance(version_data, dict)
+                    else None
                 )
-                current_version = existing_property.get("version", {}).get("number", 1)
-                data = {
-                    "key": property_key,
-                    "value": value,
-                    "version": {"number": current_version + 1},
-                }
-                response = self.session.put(url, json=data)
+                if (
+                    not str(property_id).isdigit()
+                    or type(version) is not int
+                    or version < 1
+                ):
+                    raise ValueError("Property is missing a valid ID or version")
+                url = f"{collection}/{property_id}"
+                if value is None:
+                    response = self.session.delete(url)
+                else:
+                    response = self.session.put(
+                        url,
+                        json={
+                            "key": property_key,
+                            "value": value,
+                            "version": {"number": version + 1},
+                        },
+                    )
+            elif value is None:
+                return True
             else:
-                # Create new property
-                url = f"{self.base_url}/api/v2/pages/{page_id}/properties"
-                data = {
-                    "key": property_key,
-                    "value": value,
-                }
-                response = self.session.post(url, json=data)
-
+                response = self.session.post(
+                    collection,
+                    json={
+                        "key": property_key,
+                        "value": value,
+                    },
+                )
             response.raise_for_status()
             return True
-
-        except Exception as e:
-            if isinstance(e, HTTPError) and e.response is not None:
-                logger.debug(
-                    f"HTTP error setting property '{property_key}' for page "
-                    f"'{page_id}': {e}\nResponse: {e.response.text}"
-                )
-            else:
-                logger.debug(
-                    f"Error setting property '{property_key}' for page '{page_id}': {e}"
-                )
+        except (requests.RequestException, ValueError, TypeError, KeyError):
+            logger.warning("Content property write failed")
             return False
 
     def set_page_emoji(self, page_id: str, emoji: str | None) -> bool:
@@ -741,15 +744,37 @@ class ConfluenceV2Adapter:
         Returns:
             The property data if found, None otherwise
         """
-        try:
-            url = f"{self.base_url}/api/v2/pages/{page_id}/properties/{property_key}"
-            response = self.session.get(url)
-            if response.status_code == 404:
-                return None
+        url = f"{self.base_url}/api/v2/pages/{page_id}/properties"
+        params = {"key": property_key, "limit": "100"}
+        seen: set[str] = set()
+        matches: list[dict[str, Any]] = []
+        for _ in range(100):
+            response = self.session.get(url, params=params.copy())
             response.raise_for_status()
-            return response.json()
-        except Exception:
-            return None
+            data = response.json()
+            if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+                raise ValueError("Invalid property list response")
+            for prop in data["results"]:
+                if not isinstance(prop, dict):
+                    raise ValueError("Invalid content property")
+                if prop.get("key") == property_key:
+                    matches.append(prop)
+            links = data.get("_links", {})
+            if not isinstance(links, dict):
+                raise ValueError("Invalid property pagination links")
+            next_link = links.get("next")
+            if next_link is not None and not isinstance(next_link, str):
+                raise ValueError("Invalid property pagination link")
+            if not next_link:
+                if len(matches) > 1:
+                    raise ValueError("Duplicate property keys")
+                return matches[0] if matches else None
+            cursor = parse_qs(urlparse(next_link).query).get("cursor", [None])[0]
+            if not cursor or cursor in seen:
+                raise ValueError("Invalid property pagination cursor")
+            seen.add(cursor)
+            params["cursor"] = cursor
+        raise ValueError("Property pagination limit exceeded")
 
     def get_page_versions_list(self, page_id: str) -> list[dict[str, Any]]:
         """Get list of all versions for a page using v2 API.

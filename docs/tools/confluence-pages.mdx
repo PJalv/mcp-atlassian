@@ -29,6 +29,51 @@ Content is returned in Markdown format (auto-converted from Confluence storage f
 
 ---
 
+### Page layout
+
+Page width is separate from text, block, and image alignment.
+
+| UI label / alias | REST property value |
+|---|---|
+| `narrow` | `default` |
+| `wide` | `full-width` |
+| `max` | `max` |
+
+These are three distinct widths. `max` is not an alias for `full-width`.
+Create Page and Update Page accept optional `page_width` with either the alias
+or raw value. These operations change published width only on Cloud.
+Omitting width on update preserves existing properties. An empty string resets
+published width to the explicit `default` value. Invalid widths and explicit
+widths on Server/Data Center are rejected before content writes.
+
+`confluence_get_page_layout(page_id)` reads published and draft width separately.
+Each property reports `known`, `unknown`, `missing`, `read_failed`, or
+`unsupported`, with its raw value and recognized label. Legacy `page_width`
+prefers published width and falls back to draft only when published is missing.
+Unknown values and failed reads do not imply Narrow. `conflict` is null when
+both values cannot be compared. Page reads also include structured layout metadata.
+
+The dedicated read inspects storage HTML and requests ADF through public Cloud
+REST. Evidence includes explicit alignment, sizes, tables, and layout structures.
+Unspecified alignment does not mean left-aligned or centered. The output omits
+page text, image URLs, and media identifiers, and caps each format at 200 evidence
+entries. Format failures are separate from property failures. ADF reads are
+unsupported on Server/Data Center. Targeted alignment editing is not implemented.
+
+`confluence_set_page_width(page_id, page_width, scope="published")` changes only
+width properties, without replacing the page body or incrementing its version.
+Scopes are `published`, `draft`, and `both`. Only an explicit draft scope changes
+an active draft property. This operation does not publish a draft.
+It uses supported content-property REST operations, not private GraphQL.
+
+The setter reports `success`, per-scope `writes`, `partial_write`, and
+`readback_verified`. A successful write followed by failed or mismatched readback
+is not success. Changes to both scopes are not atomic and are not rolled back.
+Create/update width failures report that content already changed; do not retry
+creation blindly. All layout responses set `rendered_verified` to false.
+REST readback confirms metadata, not visual appearance or editor publication.
+Width writes are disabled by `READ_ONLY_MODE=true`.
+
 ### Create Page
 
 Create a new Confluence page.
@@ -41,6 +86,7 @@ Create a new Confluence page.
 |-----------|------|----------|-------------|
 | `space_key` | `string` | Yes | The key of the space to create the page in (usually a short uppercase code like 'DEV', 'TEAM', or 'DOC') |
 | `title` | `string` | Yes | The title of the page |
+| `page_width` | `string` | No | Cloud published width. See Page layout. |
 | `content` | `string` | Yes | The content of the page. Format depends on content_format parameter. Can be Markdown (default), wiki markup, or storage format |
 | `parent_id` | `string` | No | (Optional) parent page ID. If provided, this page will be created as a child of the specified page |
 | `content_format` | `string` | No | (Optional) The format of the content parameter. Options: 'markdown' (default), 'wiki', or 'storage'. Wiki format uses Confluence wiki markup syntax |
@@ -71,8 +117,12 @@ Update an existing Confluence page.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `page_id` | `string` | Yes | The ID of the page to update |
-| `title` | `string` | Yes | The new title of the page |
-| `content` | `string` | Yes | The new content of the page. Format depends on content_format parameter |
+| `title` | `string` | No | New title. Omit to preserve the current title. |
+| `content` | `string` | No | New content. Required unless using exact storage replacement. |
+| `expected_version` | `integer` | No | Required current page version for a guarded update. |
+| `old_text` | `string` | No | Exact storage text to replace once. Requires `new_text`, `expected_version`, and omitted `content`. |
+| `new_text` | `string` | No | Replacement storage text. |
+| `page_width` | `string` | No | Cloud published width. See Page layout. Omit to preserve width. |
 | `is_minor_edit` | `boolean` | No | Whether this is a minor edit |
 | `version_comment` | `string` | No | Optional comment for this version |
 | `parent_id` | `string` | No | Optional the new parent page ID |
